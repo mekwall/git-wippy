@@ -28,6 +28,7 @@ jobs:
         run: cargo test
 
   build:
+    if: false
     needs: [check_format, test]
     runs-on: ubuntu-latest
     strategy:

@@ -1,4 +1,4 @@
-use crate::utils::{formatted_datetime, git_username, Git};
+use crate::utils::{formatted_datetime, git_username_with_git, Git};
 use anyhow::Result;
 
 pub async fn save_wip_changes(
@@ -10,7 +10,7 @@ pub async fn save_wip_changes(
     // Use provided values or get them from functions
     let username = match username {
         Some(u) => u,
-        None => git_username().await?,
+        None => git_username_with_git(git).await?,
     };
     let datetime = match datetime {
         Some(d) => d,
@@ -86,58 +86,107 @@ async fn generate_commit_message(git: &impl Git) -> Result<String> {
 mod tests {
     use super::*;
     use crate::utils::MockGit;
-    use anyhow::Result;
 
     #[tokio::test]
     async fn test_save_wip_changes_local() -> Result<()> {
-        let mut mock_git = Box::new(MockGit::new());
-        let test_username = "test-user".to_string();
-        let test_datetime = "2024-01-01-12-00-00".to_string();
+        let mut mock_git = MockGit::new();
 
+        // Mock git repo check
+        mock_git
+            .expect_execute()
+            .with(mockall::predicate::eq(vec![
+                "rev-parse".to_string(),
+                "--is-inside-work-tree".to_string(),
+            ]))
+            .returning(|_| Ok("true".to_string()));
+
+        // Mock username lookup
+        mock_git
+            .expect_execute()
+            .with(mockall::predicate::eq(vec![
+                "config".to_string(),
+                "user.name".to_string(),
+            ]))
+            .returning(|_| Ok("test-user".to_string()));
+
+        // Mock get_current_branch using the trait method
+        mock_git
+            .expect_get_current_branch()
+            .returning(|| Ok("main".to_string()));
+
+        // Mock getting staged files
+        mock_git
+            .expect_execute()
+            .with(mockall::predicate::eq(vec![
+                "diff".to_string(),
+                "--cached".to_string(),
+                "--name-only".to_string(),
+            ]))
+            .returning(|_| Ok("file1.txt".to_string()));
+
+        // Mock getting changed files
+        mock_git
+            .expect_execute()
+            .with(mockall::predicate::eq(vec![
+                "diff".to_string(),
+                "--name-only".to_string(),
+            ]))
+            .returning(|_| Ok("file2.txt".to_string()));
+
+        // Mock getting untracked files
+        mock_git
+            .expect_execute()
+            .with(mockall::predicate::eq(vec![
+                "ls-files".to_string(),
+                "--others".to_string(),
+                "--exclude-standard".to_string(),
+            ]))
+            .returning(|_| Ok("file3.txt".to_string()));
+
+        // Mock create_branch using the trait method
+        mock_git
+            .expect_create_branch()
+            .with(mockall::predicate::function(|branch: &str| {
+                branch.starts_with("wip/test-user/")
+            }))
+            .returning(|_| Ok("Created branch".to_string()));
+
+        // Mock commit using the trait method
+        mock_git
+            .expect_commit()
+            .with(mockall::predicate::function(|msg: &str| {
+                msg.contains("Source branch: main")
+                    && msg.contains("Staged changes:\n\tfile1.txt")
+                    && msg.contains("Changes:\n\tfile2.txt")
+                    && msg.contains("Untracked:\n\tfile3.txt")
+            }))
+            .returning(|_| Ok("Created commit".to_string()));
+
+        // Mock Git trait methods
         mock_git
             .expect_get_staged_files()
-            .returning(|| Ok("staged.txt".to_string()));
+            .returning(|| Ok("file1.txt".to_string()));
 
         mock_git
             .expect_get_changed_files()
-            .returning(|| Ok("modified.txt".to_string()));
+            .returning(|| Ok("file2.txt".to_string()));
 
         mock_git
             .expect_get_untracked_files()
-            .returning(|| Ok("untracked.txt".to_string()));
+            .returning(|| Ok("file3.txt".to_string()));
 
+        // Mock stage_all using the trait method
         mock_git
-            .expect_execute()
-            .withf(|args: &Vec<String>| {
-                args == &vec!["rev-parse".to_string(), "--is-inside-work-tree".to_string()]
-            })
-            .returning(|_| Ok(String::new()));
+            .expect_stage_all()
+            .returning(|| Ok("Changes staged".to_string()));
 
-        mock_git
-            .expect_get_current_branch()
-            .times(2)
-            .returning(|| Ok("main".to_string()));
-
-        mock_git
-            .expect_create_branch()
-            .with(mockall::predicate::eq("wip/test-user/2024-01-01-12-00-00"))
-            .returning(|_| Ok(String::new()));
-
-        mock_git.expect_stage_all().returning(|| Ok(String::new()));
-
-        mock_git
-            .expect_commit()
-            .with(mockall::predicate::eq(
-                "chore: saving work in progress\n\nSource branch: main\nStaged changes:\n\tstaged.txt\nChanges:\n\tmodified.txt\nUntracked:\n\tuntracked.txt"
-            ))
-            .returning(|_| Ok(String::new()));
-
+        // Mock checkout back to original branch
         mock_git
             .expect_checkout()
             .with(mockall::predicate::eq("main"))
-            .returning(|_| Ok(String::new()));
+            .returning(|_| Ok("Switched back to branch 'main'".to_string()));
 
-        save_wip_changes(&*mock_git, true, Some(test_username), Some(test_datetime)).await?;
+        save_wip_changes(&mock_git, true, None, None).await?;
         Ok(())
     }
 }

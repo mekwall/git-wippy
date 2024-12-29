@@ -1,4 +1,4 @@
-use crate::utils::{get_user_wip_branches, git_username, GitCommand};
+use crate::utils::{git_username_with_git, Git, GitCommand};
 use anyhow::Result;
 
 /// Lists all WIP branches for the current Git user.
@@ -14,15 +14,29 @@ use anyhow::Result;
 /// * `Err` if username retrieval or branch listing fails
 pub async fn list_wip_branches() -> Result<()> {
     let git = GitCommand::new();
-    let username = git_username().await?;
-    let wip_branches = get_user_wip_branches(&username, &git).await?;
+    list_wip_branches_with_git(&git).await
+}
+
+/// Implementation that accepts a Git instance for better testability
+pub async fn list_wip_branches_with_git(git: &impl Git) -> Result<()> {
+    let username = git_username_with_git(git).await?;
+    let wip_branches = git.get_user_wip_branches(&username).await?;
 
     if wip_branches.is_empty() {
         println!("No WIP branches found for the user: {}", username);
     } else {
         println!("WIP branches for user '{}':", username);
-        for branch in wip_branches {
-            println!("- {}", branch);
+        for branch in &wip_branches {
+            // Get commit message for each branch
+            let commit_msg = git
+                .execute(vec![
+                    "log".to_string(),
+                    "-1".to_string(),
+                    "--pretty=%B".to_string(),
+                    branch.clone(),
+                ])
+                .await?;
+            println!("- {} ({})", branch, commit_msg.lines().next().unwrap_or(""));
         }
     }
 
@@ -34,12 +48,11 @@ mod tests {
     use super::*;
     use crate::utils::MockGit;
 
-    /// Tests listing WIP branches when branches exist
     #[tokio::test]
     async fn test_list_wip_branches() -> Result<()> {
         let mut mock_git = MockGit::new();
 
-        // Mock the git username command
+        // Mock username lookup
         mock_git
             .expect_execute()
             .with(mockall::predicate::eq(vec![
@@ -48,30 +61,39 @@ mod tests {
             ]))
             .returning(|_| Ok("test-user".to_string()));
 
-        // Mock the branch listing command
+        // Mock WIP branches
         mock_git
-            .expect_execute()
-            .with(mockall::predicate::eq(vec![
-                "branch".to_string(),
-                "-a".to_string(),
-            ]))
+            .expect_get_user_wip_branches()
+            .with(mockall::predicate::eq("test-user"))
             .returning(|_| {
-                Ok(
-                    "* main\nwip/test-user/branch1\nwip/test-user/branch2\nother-branch"
-                        .to_string(),
-                )
+                Ok(vec![
+                    "wip/test-user/branch1".to_string(),
+                    "wip/test-user/branch2".to_string(),
+                ])
             });
 
-        list_wip_branches().await?;
+        // Mock getting commit messages for each branch
+        for branch in ["wip/test-user/branch1", "wip/test-user/branch2"] {
+            mock_git
+                .expect_execute()
+                .with(mockall::predicate::eq(vec![
+                    "log".to_string(),
+                    "-1".to_string(),
+                    "--pretty=%B".to_string(),
+                    branch.to_string(),
+                ]))
+                .returning(|_| Ok("WIP: Saved state from branch 'main'".to_string()));
+        }
+
+        list_wip_branches_with_git(&mock_git).await?;
         Ok(())
     }
 
-    /// Tests listing WIP branches when no branches exist
     #[tokio::test]
     async fn test_list_wip_branches_empty() -> Result<()> {
         let mut mock_git = MockGit::new();
 
-        // Mock the git username command
+        // Mock username lookup
         mock_git
             .expect_execute()
             .with(mockall::predicate::eq(vec![
@@ -80,16 +102,13 @@ mod tests {
             ]))
             .returning(|_| Ok("test-user".to_string()));
 
-        // Mock the branch listing command with no WIP branches
+        // Mock empty WIP branches list
         mock_git
-            .expect_execute()
-            .with(mockall::predicate::eq(vec![
-                "branch".to_string(),
-                "-a".to_string(),
-            ]))
-            .returning(|_| Ok("* main\nother-branch".to_string()));
+            .expect_get_user_wip_branches()
+            .with(mockall::predicate::eq("test-user"))
+            .returning(|_| Ok(Vec::new()));
 
-        list_wip_branches().await?;
+        list_wip_branches_with_git(&mock_git).await?;
         Ok(())
     }
 }

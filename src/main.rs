@@ -1,60 +1,70 @@
+use crate::commands::{
+    delete::{delete_wip_branches, DeleteOptions},
+    list_wip_branches, restore_wip_changes, save_wip_changes,
+};
 use crate::utils::GitCommand;
 use anyhow::Result;
-use clap::{Arg, Command};
+use clap::{Parser, Subcommand};
 
 mod commands;
 mod utils;
 
-#[tokio::main]
-async fn main() -> Result<()> {
-    let matches = build_cli().get_matches();
-
-    match matches.subcommand() {
-        Some(("save", sub_m)) => {
-            let local = sub_m.get_flag("local");
-            let git = GitCommand::new();
-            commands::save_wip_changes(&git, local, None, None).await?;
-        }
-        Some(("restore", _sub_m)) => {
-            commands::restore_wip_changes().await?;
-        }
-        Some(("list", _sub_m)) => {
-            commands::list_wip_branches().await?;
-        }
-        _ => {
-            // Show help text when no subcommand is provided
-            build_cli().print_help()?;
-            std::process::exit(1);
-        }
-    }
-
-    Ok(())
+#[derive(Parser)]
+#[command(author, version, about, long_about = None)]
+struct Cli {
+    #[command(subcommand)]
+    command: Commands,
 }
 
-fn build_cli() -> Command {
-    Command::new("git-wippy")
-        .version(env!("CARGO_PKG_VERSION"))
-        .author(env!("CARGO_PKG_AUTHORS"))
-        .about("A Git utility for managing work-in-progress changes across branches")
-        .subcommand(
-            Command::new("save")
-                .about("Saves current WIP changes to a temporary branch")
-                .long_about("Creates a new branch with your work-in-progress changes, allowing you to switch contexts safely")
-                .arg(
-                    Arg::new("local")
-                        .long("local")
-                        .action(clap::ArgAction::SetTrue)
-                        .help("Saves the WIP branch locally without pushing to remote origin"),
-                ),
-        )
-        .subcommand(
-            Command::new("restore")
-                .about("Restores WIP changes from a temporary branch")
-                .long_about("Retrieves your saved work-in-progress changes from a temporary branch and applies them to your current branch"),
-        )
-        .subcommand(
-            Command::new("list")
-                .about("List all WIP branches for the current user")
-                .long_about("Displays all WIP branches created by the current user, including creation date and source branch"),
-        )
+#[derive(Subcommand)]
+enum Commands {
+    /// List all WIP branches for the current user
+    List,
+    /// Save current changes to a WIP branch
+    Save {
+        /// Save only locally, don't push to remote
+        #[arg(short, long)]
+        local: bool,
+    },
+    /// Restore changes from a WIP branch
+    Restore,
+    /// Delete one or more WIP branches
+    Delete {
+        /// Branch name to delete
+        branch: Option<String>,
+        /// Delete all WIP branches
+        #[arg(short, long)]
+        all: bool,
+        /// Skip confirmation prompts
+        #[arg(short, long)]
+        force: bool,
+        /// Delete only local branches
+        #[arg(short, long)]
+        local_only: bool,
+    },
+}
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    let cli = Cli::parse();
+
+    match cli.command {
+        Commands::List => list_wip_branches().await,
+        Commands::Save { local } => save_wip_changes(&GitCommand::new(), local, None, None).await,
+        Commands::Restore => restore_wip_changes().await,
+        Commands::Delete {
+            branch,
+            all,
+            force,
+            local_only,
+        } => {
+            let options = DeleteOptions {
+                branch_name: branch,
+                all,
+                force,
+                local_only,
+            };
+            delete_wip_branches(&GitCommand::new(), options).await
+        }
+    }
 }

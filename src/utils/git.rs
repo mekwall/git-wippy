@@ -1,5 +1,7 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use async_trait::async_trait;
+use futures::stream::{self, StreamExt};
+use std::collections::HashSet;
 use tokio::process::Command;
 
 /// Trait defining Git operations used throughout the application.
@@ -28,10 +30,7 @@ pub trait Git: Send + Sync {
     }
 
     /// Stages all changes in the working directory
-    async fn stage_all(&self) -> Result<String> {
-        self.execute(vec!["add".to_string(), "--all".to_string()])
-            .await
-    }
+    async fn stage_all(&self) -> Result<String>;
 
     /// Creates a commit with the given message
     ///
@@ -76,7 +75,6 @@ pub trait Git: Send + Sync {
     async fn push(&self, remote: &str, branch: &str) -> Result<String> {
         self.execute(vec![
             "push".to_string(),
-            "-u".to_string(),
             remote.to_string(),
             branch.to_string(),
         ])
@@ -108,6 +106,36 @@ pub trait Git: Send + Sync {
         ])
         .await
     }
+
+    /// Gets a list of user WIP branches
+    async fn get_user_wip_branches(&self, username: &str) -> Result<Vec<String>> {
+        if username.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let all_branches = self
+            .execute(vec!["branch".to_string(), "-a".to_string()])
+            .await?;
+        let wip_prefix = format!("wip/{}/", username);
+
+        // Process branches concurrently
+        let branches = stream::iter(all_branches.lines())
+            .filter_map(|line| {
+                let wip_prefix = wip_prefix.clone();
+                async move {
+                    let trimmed = line.trim().replace("* ", "");
+                    if trimmed.contains(&wip_prefix) {
+                        Some(trimmed.replace("remotes/origin/", "").trim().to_string())
+                    } else {
+                        None
+                    }
+                }
+            })
+            .collect::<HashSet<_>>()
+            .await;
+
+        Ok(branches.into_iter().collect())
+    }
 }
 
 /// Thread-safe Git command implementation.
@@ -133,9 +161,10 @@ impl Git for GitCommand {
     async fn execute(&self, args: Vec<String>) -> Result<String> {
         let output = Command::new("git")
             .args(&args)
-            .kill_on_drop(true) // Ensure process is killed if dropped
+            .kill_on_drop(true)
             .output()
-            .await?;
+            .await
+            .context(format!("Failed to execute git command: {:?}", args))?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -147,6 +176,11 @@ impl Git for GitCommand {
         }
 
         Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    }
+
+    async fn stage_all(&self) -> Result<String> {
+        self.execute(vec!["add".to_string(), "-A".to_string()])
+            .await
     }
 }
 
@@ -204,5 +238,65 @@ mod tests {
         assert!(mock.stage_all().await.is_ok());
         assert!(mock.commit("test message").await.is_ok());
         assert!(mock.checkout("test-branch").await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_get_user_wip_branches() -> Result<()> {
+        let mut mock = MockGit::new();
+
+        mock.expect_get_user_wip_branches()
+            .with(mockall::predicate::eq("test-user"))
+            .returning(|_| {
+                Ok(vec![
+                    "wip/test-user/branch1".to_string(),
+                    "wip/test-user/branch2".to_string(),
+                ])
+            });
+
+        let branches = mock.get_user_wip_branches("test-user").await?;
+        assert_eq!(branches.len(), 2);
+        assert!(branches.contains(&"wip/test-user/branch1".to_string()));
+        assert!(branches.contains(&"wip/test-user/branch2".to_string()));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_get_user_wip_branches_empty_username() -> Result<()> {
+        let mut mock = MockGit::new();
+
+        mock.expect_get_user_wip_branches()
+            .with(mockall::predicate::eq(""))
+            .returning(|_| Ok(Vec::new()));
+
+        let branches = mock.get_user_wip_branches("").await?;
+        assert!(branches.is_empty());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_get_user_wip_branches_no_branches() -> Result<()> {
+        let mut mock = MockGit::new();
+
+        mock.expect_get_user_wip_branches()
+            .with(mockall::predicate::eq("test-user"))
+            .returning(|_| Ok(Vec::new()));
+
+        let branches = mock.get_user_wip_branches("test-user").await?;
+        assert!(branches.is_empty());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_get_user_wip_branches_deduplicates() -> Result<()> {
+        let mut mock = MockGit::new();
+
+        mock.expect_get_user_wip_branches()
+            .with(mockall::predicate::eq("test-user"))
+            .returning(|_| Ok(vec!["wip/test-user/branch1".to_string()]));
+
+        let branches = mock.get_user_wip_branches("test-user").await?;
+        assert_eq!(branches.len(), 1);
+        assert!(branches.contains(&"wip/test-user/branch1".to_string()));
+        Ok(())
     }
 }

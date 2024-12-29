@@ -11,7 +11,7 @@ path = "src/main.rs"
 doc = false
 
 [dependencies]
-clap = { version = "4.5.3", features = [] }
+clap = { version = "4.4", features = ["derive"] }
 tokio = { version = "1.36.0", features = ["macros", "rt-multi-thread", "process"] }
 anyhow = "1.0.81"
 chrono = "0.4.35"

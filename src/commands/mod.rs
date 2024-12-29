@@ -7,6 +7,7 @@
 //! * `save` - Saves current changes to a WIP branch
 //! * `restore` - Restores changes from a WIP branch back to original branch
 
+pub mod delete;
 pub mod list;
 pub mod restore;
 pub mod save;

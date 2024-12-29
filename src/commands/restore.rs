@@ -1,19 +1,34 @@
-use crate::utils::{
-    execute_git_command, get_user_wip_branches, git_username, parse_commit_message,
-};
+use crate::utils::{get_user_wip_branches, git_username, parse_commit_message, Git, GitCommand};
 use anyhow::{Context, Result};
 use dialoguer::{theme::ColorfulTheme, Select};
+use futures::future::try_join_all;
 
+/// Restores changes from a WIP branch back to its original source branch.
+///
+/// # Details
+/// * Retrieves WIP branches for the current user
+/// * If multiple WIP branches exist, prompts user to select one
+/// * Extracts source branch and file states from the WIP commit message
+/// * Recreates the original file states (staged, changed, untracked)
+/// * Deletes the WIP branch both locally and remotely
+///
+/// # Flow
+/// 1. Get WIP branches and select one
+/// 2. Extract information from commit message
+/// 3. Checkout WIP branch and unstage changes
+/// 4. Stash changes
+/// 5. Switch to source branch (create if needed)
+/// 6. Apply stashed changes
+/// 7. Recreate original file states
+/// 8. Clean up WIP branch
+///
+/// # Returns
+/// * `Ok(())` if restoration succeeds
+/// * `Err` if any step fails
 pub async fn restore_wip_changes() -> Result<()> {
+    let git = GitCommand::new();
     let username = git_username().await.context("Failed to get Git username")?;
-    let mut wip_branches = get_user_wip_branches(&username)
-        .await
-        .context("Failed to fetch WIP branches")?;
-
-    // Clean up the branch names by removing any leading asterisks
-    for branch in &mut wip_branches {
-        *branch = branch.trim_start_matches("* ").to_string();
-    }
+    let wip_branches = get_user_wip_branches(&username, &git).await?;
 
     let selected_branch = if wip_branches.len() > 1 {
         // Present the user with a selection if more than one WIP branch exists
@@ -28,47 +43,91 @@ pub async fn restore_wip_changes() -> Result<()> {
     };
 
     // Fetch the last commit message from the WIP branch
-    let commit_message =
-        execute_git_command(&["log", "-1", "--pretty=%B", &selected_branch]).await?;
+    let commit_message: String = git
+        .execute(vec![
+            "log".to_string(),
+            "-1".to_string(),
+            "--pretty=%B".to_string(),
+            selected_branch.clone(),
+        ])
+        .await?;
     let (source_branch, staged_files, changed_files, untracked_files) =
         parse_commit_message(&commit_message);
 
     // Checkout the WIP branch and revert the last commit to unstage changes
-    execute_git_command(&["checkout", &selected_branch]).await?;
-    execute_git_command(&["reset", "--soft", "HEAD~"]).await?;
+    git.checkout(&selected_branch).await?;
+    git.execute(vec![
+        "reset".to_string(),
+        "--soft".to_string(),
+        "HEAD~".to_string(),
+    ])
+    .await?;
 
     // Stash all changes
-    execute_git_command(&["stash", "push", "-u", "-m", "Restoring WIP changes"]).await?;
+    git.execute(vec![
+        "stash".to_string(),
+        "push".to_string(),
+        "-u".to_string(),
+        "-m".to_string(),
+        "Restoring WIP changes".to_string(),
+    ])
+    .await?;
 
     // Determine if the source branch exists, create it if not
-    let branch_exists = execute_git_command(&["rev-parse", "--verify", &source_branch])
+    let branch_exists = git
+        .execute(vec![
+            "rev-parse".to_string(),
+            "--verify".to_string(),
+            source_branch.clone(),
+        ])
         .await
         .is_ok();
+
     if branch_exists {
-        execute_git_command(&["checkout", &source_branch]).await?;
+        git.checkout(&source_branch).await?;
     } else {
-        execute_git_command(&["checkout", "-b", &source_branch]).await?;
+        git.create_branch(&source_branch).await?;
     }
 
     // Apply the stash
-    execute_git_command(&["stash", "pop"]).await?;
+    git.execute(vec!["stash".to_string(), "pop".to_string()])
+        .await?;
 
     // Recreate the original state of files based on the parsed commit message
-    recreate_file_states(staged_files, changed_files, untracked_files).await?;
+    recreate_file_states(&git, staged_files, changed_files, untracked_files).await?;
 
     // Delete the WIP branch locally and remotely
-    execute_git_command(&["branch", "-D", &selected_branch]).await?;
+    git.execute(vec![
+        "branch".to_string(),
+        "-D".to_string(),
+        selected_branch.clone(),
+    ])
+    .await?;
 
     // Only attempt to delete the remote branch if the "origin" remote exists
-    let remotes = execute_git_command(&["remote"]).await?;
+    let remotes = git.execute(vec!["remote".to_string()]).await?;
     if remotes.contains("origin") {
-        execute_git_command(&["push", "origin", "--delete", &selected_branch]).await?;
+        git.execute(vec![
+            "push".to_string(),
+            "origin".to_string(),
+            "--delete".to_string(),
+            selected_branch.clone(),
+        ])
+        .await?;
     }
 
     println!("Successfully restored changes from '{}'", selected_branch);
     Ok(())
 }
 
+/// Prompts the user to select a WIP branch from a list.
+///
+/// # Arguments
+/// * `options` - List of branch names to choose from
+///
+/// # Returns
+/// * `Ok(String)` - The selected branch name
+/// * `Err` if user interaction fails
 async fn get_user_selection(options: &[String]) -> Result<String> {
     let selection = Select::with_theme(&ColorfulTheme::default())
         .with_prompt("Select a WIP branch to restore")
@@ -80,26 +139,101 @@ async fn get_user_selection(options: &[String]) -> Result<String> {
     Ok(options[selection].clone())
 }
 
+/// Recreates the original state of files in the working directory.
+///
+/// # Arguments
+/// * `git` - Git implementation to use for commands
+/// * `staged_files` - Files that should be staged
+/// * `changed_files` - Files that should be changed but unstaged
+/// * `untracked_files` - Files that should be untracked
+///
+/// # Details
+/// * Stages files using `git add`
+/// * Unstages files using `git reset HEAD`
+/// * Ensures correct tracking status for each file
 async fn recreate_file_states(
+    git: &impl Git,
     staged_files: Vec<String>,
     changed_files: Vec<String>,
     untracked_files: Vec<String>,
 ) -> Result<()> {
-    // Example logic to recreate the original state of files
-    // You'll need to adjust based on your specific needs and Git's capabilities
+    // Process file operations concurrently
+    let stage_futures = staged_files
+        .into_iter()
+        .map(|file| git.execute(vec!["add".to_string(), file]));
 
-    // Restage staged files
-    for file in staged_files {
-        execute_git_command(&["add", &file]).await?;
-    }
+    let change_futures = changed_files.into_iter().map(|file| {
+        git.execute(vec![
+            "reset".to_string(),
+            "HEAD".to_string(),
+            "--".to_string(),
+            file,
+        ])
+    });
 
-    for file in changed_files {
-        execute_git_command(&["reset", "HEAD", "--", &file]).await?;
-    }
+    let untrack_futures = untracked_files.into_iter().map(|file| {
+        git.execute(vec![
+            "reset".to_string(),
+            "HEAD".to_string(),
+            "--".to_string(),
+            file,
+        ])
+    });
 
-    for file in untracked_files {
-        execute_git_command(&["reset", "HEAD", "--", &file]).await?;
-    }
+    // Run all operations concurrently
+    try_join_all(stage_futures).await?;
+    try_join_all(change_futures).await?;
+    try_join_all(untrack_futures).await?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::utils::MockGit;
+
+    /// Tests that file states are correctly recreated
+    #[tokio::test]
+    async fn test_recreate_file_states() -> Result<()> {
+        let mut mock_git = MockGit::new();
+
+        let staged_files = vec!["staged.txt".to_string()];
+        let changed_files = vec!["changed.txt".to_string()];
+        let untracked_files = vec!["untracked.txt".to_string()];
+
+        // Expect add command for staged files
+        mock_git
+            .expect_execute()
+            .with(mockall::predicate::eq(vec![
+                "add".to_string(),
+                "staged.txt".to_string(),
+            ]))
+            .returning(|_| Ok(String::new()));
+
+        // Expect reset command for changed files
+        mock_git
+            .expect_execute()
+            .with(mockall::predicate::eq(vec![
+                "reset".to_string(),
+                "HEAD".to_string(),
+                "--".to_string(),
+                "changed.txt".to_string(),
+            ]))
+            .returning(|_| Ok(String::new()));
+
+        // Expect reset command for untracked files
+        mock_git
+            .expect_execute()
+            .with(mockall::predicate::eq(vec![
+                "reset".to_string(),
+                "HEAD".to_string(),
+                "--".to_string(),
+                "untracked.txt".to_string(),
+            ]))
+            .returning(|_| Ok(String::new()));
+
+        recreate_file_states(&mock_git, staged_files, changed_files, untracked_files).await?;
+        Ok(())
+    }
 }

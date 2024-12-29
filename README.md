@@ -1,16 +1,20 @@
 # git-wippy
 
-## Description
+A Git utility for managing work-in-progress changes across branches with super powers! 🦸‍♂️
 
-Git stash with super powers! A dev tool to simplify working with work in progress changes that acts as a sub command for git.
+## Features
 
-When saving your work it creates a temporary WIP branch (pushes to remote by default) that stores your changes and allows you to restore them later. It even keeps track of which branch you were working on and which files were staged and untracked.
+- 🔄 Save WIP changes to a dedicated branch
+- 📋 List all your WIP branches
+- ⚡ Restore WIP changes back to their original branches
+- 🔒 Thread-safe and async operations
+- 🌟 Maintains file states (staged, unstaged, untracked)
+- 🔍 Smart branch naming with username and timestamps
+- 🌐 Supports both local and remote operations
 
 ## Installation
 
-Coming soon!
-
-Download the latest binary for your platform under releases and put it in your executable paths.
+Binary releases and automatic publishing to package repositories are coming soon!
 
 ## Build and install from sources
 
@@ -21,19 +25,57 @@ To install, follow these steps:
 1. Install [Rust and cargo](https://www.rust-lang.org/tools/install).
 2. Clone this repository.
 3. Navigate to the project directory and run `cargo build -r`.
-4. Copy `git-wippy` binary from `target/release` to somehwere that is in your executable paths.
+4. Copy `git-wippy` binary from `target/release` to somewhere in your executable paths.
 
 ## Usage
 
 When `git-wippy` is located somewhere in your executable paths it can be used as a `git` subcommand.
 
-Executed with `git wippy <command>`:
+### Commands
 
-- `restore`: Restore your WIP changes
-- `save`: Save your WIP changes (use `--local` flag to only save locally)
-- `list`: List all WIP branches
+```bash
+# Save your WIP changes (pushes to remote by default)
+git wippy save
 
-## Contributing
+# Save changes locally only
+git wippy save --local
+
+# List all your WIP branches
+git wippy list
+
+# Restore changes from a WIP branch
+git wippy restore
+```
+
+## How It Works
+
+1. **Saving Changes**:
+
+   - Creates a WIP branch named `wip/{username}/{timestamp}`
+   - Preserves the state of all files (staged, unstaged, untracked)
+   - Stores metadata about the source branch
+   - Optionally pushes to remote
+
+2. **Listing Changes**:
+
+   - Shows all WIP branches for the current user
+   - Filters branches matching `wip/{username}/*`
+   - Handles both local and remote branches
+
+3. **Restoring Changes**:
+   - Retrieves changes from the WIP branch
+   - Recreates the original file states
+   - Returns to the source branch
+   - Cleans up the WIP branch
+
+## Development
+
+### Requirements
+
+- Git 2.0+
+- Rust 1.70+
+
+### Contributing
 
 If you want to contribute to this project, please follow these steps:
 
@@ -43,6 +85,23 @@ If you want to contribute to this project, please follow these steps:
 4. Push your changes to your fork.
 5. Create a pull request.
 
+```bash
+# Run tests
+cargo test
+
+# Build release version
+cargo build -r
+
+# Install locally
+cargo install --path .
+```
+
+## Acknowledgments
+
+- Built with Rust 🦀
+- Uses [tokio](https://tokio.rs/) for async operations
+- Uses [clap](https://clap.rs/) for CLI argument parsing
+
 ## License
 
-This project is licensed under [MIT](./LICENSE).
+This project is licensed under the [MIT License](./LICENSE).

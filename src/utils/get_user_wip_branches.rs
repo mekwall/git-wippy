@@ -1,71 +1,81 @@
-use super::execute_git_command;
+use crate::utils::git::Git;
 use anyhow::Result;
+use futures::stream::{self, StreamExt};
 use std::collections::HashSet;
 
-pub async fn get_user_wip_branches(username: &str) -> Result<Vec<String>> {
-    let all_branches = execute_git_command(&["branch", "-a"]).await?;
-    let mut branch_set = HashSet::new();
+/// Retrieves a list of WIP branches for a specific user.
+///
+/// # Arguments
+/// * `username` - The username to filter WIP branches for
+/// * `git` - Implementation of the Git trait for executing commands
+///
+/// # Returns
+/// * `Ok(Vec<String>)` - List of WIP branch names for the user
+/// * `Err` - If git command fails or output can't be parsed
+///
+/// # Details
+/// * Returns empty Vec if username is empty
+/// * Filters branches starting with "wip/{username}/"
+/// * Removes duplicates and remote branch prefixes
+pub async fn get_user_wip_branches(username: &str, git: &impl Git) -> Result<Vec<String>> {
+    if username.is_empty() {
+        return Ok(Vec::new());
+    }
 
-    all_branches
-        .lines()
+    let all_branches = git
+        .execute(vec!["branch".to_string(), "-a".to_string()])
+        .await?;
+    let wip_prefix = format!("wip/{}/", username);
+
+    // Process branches concurrently
+    let branches = stream::iter(all_branches.lines())
         .filter_map(|line| {
-            let trimmed = line.trim().replace("* ", ""); // Remove any leading asterisks and spaces
-            if trimmed.contains(&format!("wip/{}/", username)) {
-                Some(
-                    trimmed
-                        .replace("remotes/origin/", "") // Clean up remote branch names
-                        .trim()
-                        .to_string(),
-                )
-            } else {
-                None
+            let wip_prefix = wip_prefix.clone();
+            async move {
+                let trimmed = line.trim().replace("* ", "");
+                if trimmed.contains(&wip_prefix) {
+                    Some(trimmed.replace("remotes/origin/", "").trim().to_string())
+                } else {
+                    None
+                }
             }
         })
-        .for_each(|branch| {
-            branch_set.insert(branch); // HashSet automatically removes duplicates
-        });
+        .collect::<HashSet<_>>()
+        .await;
 
-    // Convert the HashSet back into a Vec<String> for the return value
-    Ok(branch_set.into_iter().collect())
+    Ok(branches.into_iter().collect())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use async_trait::async_trait;
-    use mockall::{automock, predicate::*};
+    use crate::utils::MockGit;
 
-    #[automock]
-    #[async_trait]
-    trait Git {
-        async fn get_user_wip_branches(&self, user: &str) -> Result<Vec<String>, anyhow::Error>;
+    /// Tests that WIP branches are correctly filtered and returned
+    #[tokio::test]
+    async fn test_get_user_wip_branches() -> Result<()> {
+        let mut mock_git = MockGit::new();
+        mock_git
+            .expect_execute()
+            .with(mockall::predicate::eq(vec![
+                "branch".to_string(),
+                "-a".to_string(),
+            ]))
+            .returning(|_| Ok("* main\nwip/test-user/branch1\nwip/test-user/branch2".to_string()));
+
+        let branches = get_user_wip_branches("test-user", &mock_git).await?;
+        assert_eq!(branches.len(), 2);
+        assert!(branches.contains(&"wip/test-user/branch1".to_string()));
+        assert!(branches.contains(&"wip/test-user/branch2".to_string()));
+        Ok(())
     }
 
+    /// Tests that empty username returns empty list
     #[tokio::test]
-    async fn test_get_user_wip_branches() -> Result<(), anyhow::Error> {
-        let mut mock = MockGit::new();
-
-        // Test case 1: No branches
-        mock.expect_get_user_wip_branches()
-            .with(eq("user1"))
-            .return_once(|_| Ok(Vec::<String>::new()));
-        let branches = mock.get_user_wip_branches("user1").await?;
-        assert_eq!(branches, Vec::<String>::new());
-
-        // Test case 2: Single branch
-        mock.expect_get_user_wip_branches()
-            .with(eq("user2"))
-            .return_once(|_| Ok(vec!["branch1".to_string()]));
-        let branches = mock.get_user_wip_branches("user2").await?;
-        assert_eq!(branches, vec!["branch1".to_string()]);
-
-        // Test case 3: Multiple branches
-        mock.expect_get_user_wip_branches()
-            .with(eq("user3"))
-            .return_once(|_| Ok(vec!["branch2".to_string(), "branch3".to_string()]));
-        let branches = mock.get_user_wip_branches("user3").await?;
-        assert_eq!(branches, vec!["branch2".to_string(), "branch3".to_string()]);
-
+    async fn test_empty_username() -> Result<()> {
+        let mock_git = MockGit::new();
+        let branches = get_user_wip_branches("", &mock_git).await?;
+        assert!(branches.is_empty());
         Ok(())
     }
 }

@@ -1,3 +1,12 @@
+//! Command implementations for git-wippy
+//!
+//! This module contains the main command implementations that provide
+//! the core functionality of git-wippy:
+//!
+//! * `list` - Lists all WIP branches for the current user
+//! * `save` - Saves current changes to a WIP branch
+//! * `restore` - Restores changes from a WIP branch back to original branch
+
 pub mod list;
 pub mod restore;
 pub mod save;

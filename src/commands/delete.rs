@@ -140,14 +140,24 @@ pub async fn delete_wip_branches_with_git(git: &impl Git, options: DeleteOptions
 
         // Delete remote branch if requested
         if delete_remote {
-            git.execute(vec![
-                "push".to_string(),
-                "origin".to_string(),
-                "--delete".to_string(),
-                branch.clone(),
-            ])
-            .await
-            .context(format!("Failed to delete remote branch '{}'", branch))?;
+            match git
+                .execute(vec![
+                    "push".to_string(),
+                    "origin".to_string(),
+                    "--delete".to_string(),
+                    branch.clone(),
+                ])
+                .await
+            {
+                Ok(_) => {}
+                Err(e) => {
+                    // Log the error but continue execution
+                    eprintln!(
+                        "Warning: Failed to delete remote branch '{}' (it may not exist): {}",
+                        branch, e
+                    );
+                }
+            }
         }
 
         println!(

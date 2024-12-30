@@ -1,70 +1,45 @@
-use crate::commands::{
-    delete::{delete_wip_branches, DeleteOptions},
-    list_wip_branches, restore_wip_changes, save_wip_changes,
-};
-use crate::utils::GitCommand;
-use anyhow::Result;
-use clap::{Parser, Subcommand};
-
+mod cli;
 mod commands;
+mod i18n;
+mod output;
 mod utils;
 
-#[derive(Parser)]
-#[command(author, version, about, long_about = None)]
-struct Cli {
-    #[command(subcommand)]
-    command: Commands,
-}
-
-#[derive(Subcommand)]
-enum Commands {
-    /// List all WIP branches for the current user
-    List,
-    /// Save current changes to a WIP branch
-    Save {
-        /// Save only locally, don't push to remote
-        #[arg(short, long)]
-        local: bool,
-    },
-    /// Restore changes from a WIP branch
-    Restore,
-    /// Delete one or more WIP branches
-    Delete {
-        /// Branch name to delete
-        branch: Option<String>,
-        /// Delete all WIP branches
-        #[arg(short, long)]
-        all: bool,
-        /// Skip confirmation prompts
-        #[arg(short, long)]
-        force: bool,
-        /// Delete only local branches
-        #[arg(short, long)]
-        local_only: bool,
-    },
-}
+use crate::cli::{Cli, Commands};
+use crate::commands::{
+    delete::delete_wip_branches, delete::DeleteOptions, list::list_wip_branches,
+    restore::restore_wip_changes, restore::RestoreOptions, save::save_wip_changes,
+};
+use anyhow::Result;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let cli = Cli::parse();
+    let cli = Cli::new();
 
     match cli.command {
-        Commands::List => list_wip_branches().await,
-        Commands::Save { local } => save_wip_changes(&GitCommand::new(), local, None, None).await,
-        Commands::Restore => restore_wip_changes().await,
-        Commands::Delete {
-            branch,
-            all,
-            force,
-            local_only,
-        } => {
-            let options = DeleteOptions {
-                branch_name: branch,
-                all,
-                force,
-                local_only,
-            };
-            delete_wip_branches(&GitCommand::new(), options).await
+        Commands::Save(options) => {
+            save_wip_changes(options.local, options.username, options.datetime).await?;
+        }
+        Commands::List => {
+            list_wip_branches().await?;
+        }
+        Commands::Delete(options) => {
+            delete_wip_branches(DeleteOptions {
+                branch_name: options.branch,
+                all: options.all,
+                force: options.force,
+                local_only: options.local,
+            })
+            .await?;
+        }
+        Commands::Restore(options) => {
+            restore_wip_changes(RestoreOptions {
+                branch_name: options.branch,
+                force: options.force,
+                autostash: options.autostash,
+            })
+            .await?;
         }
     }
+
+    Ok(())
 }

@@ -1,12 +1,25 @@
-use crate::utils::{formatted_datetime, git_username_with_git, Git};
+use crate::i18n::t;
+use crate::output::Output;
+use crate::utils::{formatted_datetime, git_username_with_git, Git, GitCommand};
 use anyhow::Result;
 
 pub async fn save_wip_changes(
+    local: bool,
+    username: Option<String>,
+    datetime: Option<String>,
+) -> Result<()> {
+    let git = GitCommand::new();
+    save_wip_changes_with_git(&git, local, username, datetime).await
+}
+
+pub async fn save_wip_changes_with_git(
     git: &impl Git,
     local: bool,
     username: Option<String>,
     datetime: Option<String>,
 ) -> Result<()> {
+    let output = Output::new().await?;
+
     // Use provided values or get them from functions
     let username = match username {
         Some(u) => u,
@@ -19,34 +32,45 @@ pub async fn save_wip_changes(
 
     let branch_name = format!("wip/{}/{}", username, datetime);
 
-    // Ensure we're in a git repository
-    git.execute(vec![
-        "rev-parse".to_string(),
-        "--is-inside-work-tree".to_string(),
-    ])
-    .await?;
-
     // Store the current branch name before switching
     let original_branch = git.get_current_branch().await?;
+
+    output.info(&t("saving-wip"))?;
 
     // Generate the detailed commit message
     let commit_message = generate_commit_message(git).await?;
 
     // Create and switch to the new branch
     git.create_branch(&branch_name).await?;
+    output.info(
+        &output.format_with_highlights(&t("created-branch"), &[&format!("'{}'", branch_name)]),
+    )?;
+
     git.stage_all().await?;
+    output.info(&t("staged-all-changes"))?;
+
     git.commit(&commit_message).await?;
+    output.info(&t("committed-changes"))?;
 
     if !local {
-        git.push("origin", &branch_name).await?;
+        // Check if there are any remotes configured
+        let remotes = git.get_remotes().await?;
+        if !remotes.is_empty() {
+            git.push("origin", &branch_name).await?;
+            output.info(&t("pushed-changes"))?;
+        } else {
+            output.info(&t("skipped-push-no-remote"))?;
+        }
     }
 
     git.checkout(&original_branch).await?;
+    output.info(
+        &output.format_with_highlights(&t("switched-back"), &[&format!("'{}'", original_branch)]),
+    )?;
 
-    println!(
-        "WIP changes saved to branch '{}' and returned to '{}'",
-        branch_name, original_branch
-    );
+    output.info(
+        &output.format_with_highlights(&t("wip-branch-created"), &[&format!("'{}'", branch_name)]),
+    )?;
     Ok(())
 }
 
@@ -91,15 +115,6 @@ mod tests {
     async fn test_save_wip_changes_local() -> Result<()> {
         let mut mock_git = MockGit::new();
 
-        // Mock git repo check
-        mock_git
-            .expect_execute()
-            .with(mockall::predicate::eq(vec![
-                "rev-parse".to_string(),
-                "--is-inside-work-tree".to_string(),
-            ]))
-            .returning(|_| Ok("true".to_string()));
-
         // Mock username lookup
         mock_git
             .expect_execute()
@@ -109,41 +124,27 @@ mod tests {
             ]))
             .returning(|_| Ok("test-user".to_string()));
 
-        // Mock get_current_branch using the trait method
+        // Mock get_current_branch
         mock_git
             .expect_get_current_branch()
             .returning(|| Ok("main".to_string()));
 
         // Mock getting staged files
         mock_git
-            .expect_execute()
-            .with(mockall::predicate::eq(vec![
-                "diff".to_string(),
-                "--cached".to_string(),
-                "--name-only".to_string(),
-            ]))
-            .returning(|_| Ok("file1.txt".to_string()));
+            .expect_get_staged_files()
+            .returning(|| Ok("file1.txt".to_string()));
 
         // Mock getting changed files
         mock_git
-            .expect_execute()
-            .with(mockall::predicate::eq(vec![
-                "diff".to_string(),
-                "--name-only".to_string(),
-            ]))
-            .returning(|_| Ok("file2.txt".to_string()));
+            .expect_get_changed_files()
+            .returning(|| Ok("file2.txt".to_string()));
 
         // Mock getting untracked files
         mock_git
-            .expect_execute()
-            .with(mockall::predicate::eq(vec![
-                "ls-files".to_string(),
-                "--others".to_string(),
-                "--exclude-standard".to_string(),
-            ]))
-            .returning(|_| Ok("file3.txt".to_string()));
+            .expect_get_untracked_files()
+            .returning(|| Ok("file3.txt".to_string()));
 
-        // Mock create_branch using the trait method
+        // Mock create_branch
         mock_git
             .expect_create_branch()
             .with(mockall::predicate::function(|branch: &str| {
@@ -151,7 +152,12 @@ mod tests {
             }))
             .returning(|_| Ok("Created branch".to_string()));
 
-        // Mock commit using the trait method
+        // Mock stage_all
+        mock_git
+            .expect_stage_all()
+            .returning(|| Ok("Changes staged".to_string()));
+
+        // Mock commit
         mock_git
             .expect_commit()
             .with(mockall::predicate::function(|msg: &str| {
@@ -162,23 +168,77 @@ mod tests {
             }))
             .returning(|_| Ok("Created commit".to_string()));
 
-        // Mock Git trait methods
+        // Mock checkout back to original branch
+        mock_git
+            .expect_checkout()
+            .with(mockall::predicate::eq("main"))
+            .returning(|_| Ok("Switched back to branch 'main'".to_string()));
+
+        save_wip_changes_with_git(&mock_git, true, None, None).await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_save_wip_changes_with_remote() -> Result<()> {
+        let mut mock_git = MockGit::new();
+
+        // Mock username lookup
+        mock_git
+            .expect_execute()
+            .with(mockall::predicate::eq(vec![
+                "config".to_string(),
+                "user.name".to_string(),
+            ]))
+            .returning(|_| Ok("test-user".to_string()));
+
+        // Mock get_current_branch
+        mock_git
+            .expect_get_current_branch()
+            .times(2)
+            .returning(|| Ok("main".to_string()));
+
+        // Mock getting staged files
         mock_git
             .expect_get_staged_files()
             .returning(|| Ok("file1.txt".to_string()));
 
+        // Mock getting changed files
         mock_git
             .expect_get_changed_files()
             .returning(|| Ok("file2.txt".to_string()));
 
+        // Mock getting untracked files
         mock_git
             .expect_get_untracked_files()
             .returning(|| Ok("file3.txt".to_string()));
 
-        // Mock stage_all using the trait method
+        // Mock create_branch
+        mock_git
+            .expect_create_branch()
+            .with(mockall::predicate::function(|branch: &str| {
+                branch.starts_with("wip/test-user/")
+            }))
+            .returning(|_| Ok("Created branch".to_string()));
+
+        // Mock stage_all
         mock_git
             .expect_stage_all()
             .returning(|| Ok("Changes staged".to_string()));
+
+        // Mock commit
+        mock_git
+            .expect_commit()
+            .returning(|_| Ok("Created commit".to_string()));
+
+        // Mock get_remotes
+        mock_git
+            .expect_get_remotes()
+            .returning(|| Ok(vec!["origin".to_string()]));
+
+        // Mock push
+        mock_git
+            .expect_push()
+            .returning(|_, _| Ok("Pushed changes".to_string()));
 
         // Mock checkout back to original branch
         mock_git
@@ -186,7 +246,72 @@ mod tests {
             .with(mockall::predicate::eq("main"))
             .returning(|_| Ok("Switched back to branch 'main'".to_string()));
 
-        save_wip_changes(&mock_git, true, None, None).await?;
+        save_wip_changes_with_git(&mock_git, false, None, None).await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_save_wip_changes_no_remote() -> Result<()> {
+        let mut mock_git = MockGit::new();
+
+        // Mock username lookup
+        mock_git
+            .expect_execute()
+            .with(mockall::predicate::eq(vec![
+                "config".to_string(),
+                "user.name".to_string(),
+            ]))
+            .returning(|_| Ok("test-user".to_string()));
+
+        // Mock get_current_branch
+        mock_git
+            .expect_get_current_branch()
+            .times(2)
+            .returning(|| Ok("main".to_string()));
+
+        // Mock getting staged files
+        mock_git
+            .expect_get_staged_files()
+            .returning(|| Ok("file1.txt".to_string()));
+
+        // Mock getting changed files
+        mock_git
+            .expect_get_changed_files()
+            .returning(|| Ok("file2.txt".to_string()));
+
+        // Mock getting untracked files
+        mock_git
+            .expect_get_untracked_files()
+            .returning(|| Ok("file3.txt".to_string()));
+
+        // Mock create_branch
+        mock_git
+            .expect_create_branch()
+            .with(mockall::predicate::function(|branch: &str| {
+                branch.starts_with("wip/test-user/")
+            }))
+            .returning(|_| Ok("Created branch".to_string()));
+
+        // Mock stage_all
+        mock_git
+            .expect_stage_all()
+            .returning(|| Ok("Changes staged".to_string()));
+
+        // Mock commit
+        mock_git
+            .expect_commit()
+            .returning(|_| Ok("Created commit".to_string()));
+
+        // Mock get_remotes - return empty list
+        mock_git.expect_get_remotes().returning(|| Ok(vec![]));
+
+        // Mock checkout back to original branch
+        mock_git
+            .expect_checkout()
+            .with(mockall::predicate::eq("main"))
+            .returning(|_| Ok("Switched back to branch 'main'".to_string()));
+
+        save_wip_changes_with_git(&mock_git, false, None, None).await?;
         Ok(())
     }
 }

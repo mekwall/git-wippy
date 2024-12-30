@@ -1,6 +1,6 @@
 # git-wippy
 
-A Git utility for managing work-in-progress changes across branches with super powers! 🦸‍♂️
+A Git subcommand for managing work-in-progress changes across branches. Stash with super powers! 🦸‍♂️
 
 ## Features
 
@@ -10,22 +10,24 @@ A Git utility for managing work-in-progress changes across branches with super p
 - 🔒 Thread-safe and async operations
 - 🌟 Maintains file states (staged, unstaged, untracked)
 - 🔍 Smart branch naming with username and timestamps
+- 🔄 Interactive branch selection for restore operations
 - 🌐 Supports both local and remote operations
 
 ## Installation
 
-Binary releases and automatic publishing to package repositories are coming soon!
+### From Package Managers
 
-## Build and install from sources
+Coming soon!
 
-This project is built with [Rust](https://www.rust-lang.org/), using [cargo](https://doc.rust-lang.org/cargo/) as a build system and package manager.
+### Build from Source
 
-To install, follow these steps:
+1. Install [Rust and cargo](https://www.rust-lang.org/tools/install)
+2. Clone this repository
+3. Build and install:
 
-1. Install [Rust and cargo](https://www.rust-lang.org/tools/install).
-2. Clone this repository.
-3. Navigate to the project directory and run `cargo build -r`.
-4. Copy `git-wippy` binary from `target/release` to somewhere in your executable paths.
+```bash
+cargo install --path .
+```
 
 ## Usage
 
@@ -35,16 +37,29 @@ When `git-wippy` is located somewhere in your executable paths it can be used as
 
 ```bash
 # Save your WIP changes (pushes to remote by default)
-git wippy save
-
-# Save changes locally only
-git wippy save --local
+git wippy save [--message "Your message"]
+git wippy save --local  # Save locally only
 
 # List all your WIP branches
 git wippy list
+git wippy list --all    # Show all users' WIP branches
 
 # Restore changes from a WIP branch
-git wippy restore
+git wippy restore                # Interactive selection
+git wippy restore <branch-name>  # Direct restore
+```
+
+### Examples
+
+```bash
+# Save changes with a custom message
+git wippy save -m "Feature work in progress"
+
+# List only your WIP branches with details
+git wippy list
+
+# Restore specific WIP changes
+git wippy restore wip/username/2024-03-21-175930
 ```
 
 ## How It Works
@@ -59,14 +74,15 @@ git wippy restore
 2. **Listing Changes**:
 
    - Shows all WIP branches for the current user
-   - Filters branches matching `wip/{username}/*`
-   - Handles both local and remote branches
+   - Displays branch creation time and source branch
+   - Supports filtering and detailed views
+   - Color-coded output for better readability
 
 3. **Restoring Changes**:
-   - Retrieves changes from the WIP branch
-   - Recreates the original file states
-   - Returns to the source branch
-   - Cleans up the WIP branch
+   - Interactive branch selection with preview
+   - Smart conflict resolution
+   - Recreates original file states
+   - Automatic cleanup of restored WIP branches
 
 ## Development
 
@@ -75,32 +91,39 @@ git wippy restore
 - Git 2.0+
 - Rust 1.70+
 
-### Contributing
-
-If you want to contribute to this project, please follow these steps:
-
-1. Fork the project.
-2. Create a new branch.
-3. Make your changes and commit them.
-4. Push your changes to your fork.
-5. Create a pull request.
+### Testing
 
 ```bash
-# Run tests
+# Run all tests
 cargo test
 
-# Build release version
-cargo build -r
-
-# Install locally
-cargo install --path .
+# Run specific test suite
+cargo test <test_name>
 ```
 
-## Acknowledgments
+### Contributing
 
-- Built with Rust 🦀
-- Uses [tokio](https://tokio.rs/) for async operations
-- Uses [clap](https://clap.rs/) for CLI argument parsing
+1. Fork the project
+2. Create a new branch
+3. Make your changes and commit them
+4. Push your changes to your fork
+5. Create a pull request
+
+Please ensure your PR:
+
+- Includes tests for new functionality
+- Updates documentation as needed
+- Follows the existing code style
+
+## Technical Details
+
+Built with:
+
+- 🦀 Rust for performance and safety
+- 🔄 [tokio](https://tokio.rs/) for async operations
+- 📎 [clap](https://clap.rs/) for CLI argument parsing
+- 🎨 [owo-colors](https://docs.rs/owo-colors/) for terminal coloring
+- 🔍 [dialoguer](https://docs.rs/dialoguer/) for interactive prompts
 
 ## License
 

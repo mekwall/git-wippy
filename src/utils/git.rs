@@ -1,23 +1,116 @@
+use crate::output::Output;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
-use futures::stream::{self, StreamExt};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use tokio::process::Command;
 
-/// Trait defining Git operations used throughout the application.
-/// Provides both low-level command execution and high-level convenience methods.
+/// A trait that abstracts Git operations used throughout the application.
+///
+/// This trait provides both low-level command execution and high-level Git operations.
+/// It is designed to be mockable for testing and allows for different implementations
+/// (e.g., real Git commands, mock for testing, or alternative Git implementations).
+///
+/// # Implementation Notes
+///
+/// - All methods are async and return `Result<T>`
+/// - Methods should handle common Git errors and provide context
+/// - Implementations should be thread-safe (Send + Sync)
+///
+/// # Examples
+///
+/// ```no_run
+/// use git_wippy::Git;
+///
+/// async fn example(git: &impl Git) -> anyhow::Result<()> {
+///     // Get current branch
+///     let branch = git.get_current_branch().await?;
+///
+///     // Stage and commit changes
+///     git.stage_all().await?;
+///     git.commit("feat: add new feature").await?;
+///
+///     Ok(())
+/// }
+/// ```
 #[cfg_attr(test, mockall::automock)]
 #[async_trait]
 pub trait Git: Send + Sync {
-    /// Executes a raw git command with the given arguments.
+    /// Executes a raw Git command with the given arguments.
+    ///
+    /// This is a low-level method that runs Git commands directly. Prefer using
+    /// the higher-level methods when possible.
     ///
     /// # Arguments
+    ///
     /// * `args` - Vector of command arguments to pass to git
     ///
     /// # Returns
-    /// * `Ok(String)` containing the command's stdout output if successful
-    /// * `Err` if the command fails or output can't be parsed as UTF-8
+    ///
+    /// * `Ok(String)` - Command's stdout output if successful
+    /// * `Err(Error)` - If the command fails or output can't be parsed as UTF-8
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - The Git command fails to execute
+    /// - The command returns a non-zero exit code
+    /// - The output cannot be parsed as UTF-8
     async fn execute(&self, args: Vec<String>) -> Result<String>;
+
+    /// Gets all Git configuration as key-value pairs.
+    ///
+    /// # Returns
+    /// * `Ok(HashMap<String, String>)` - Map of config keys to their values
+    /// * `Err` if the git config command fails
+    ///
+    /// # Example keys
+    /// * "user.name"
+    /// * "user.email"
+    /// * "color.ui"
+    #[allow(dead_code)]
+    async fn get_config(&self) -> Result<HashMap<String, String>> {
+        let output = self
+            .execute(vec!["config".to_string(), "--list".to_string()])
+            .await?;
+
+        let mut config = HashMap::new();
+        for line in output.lines() {
+            if let Some((key, value)) = line.split_once('=') {
+                config.insert(key.trim().to_string(), value.trim().to_string());
+            }
+        }
+        Ok(config)
+    }
+
+    /// Gets a specific Git configuration value.
+    ///
+    /// # Arguments
+    /// * `key` - The configuration key to look up (e.g., "user.name", "color.ui")
+    ///
+    /// # Returns
+    /// * `Ok(Some(String))` - The config value if found
+    /// * `Ok(None)` - If the config key doesn't exist
+    /// * `Err` if the git config command fails
+    async fn get_config_value(&self, key: &str) -> Result<Option<String>> {
+        match self
+            .execute(vec![
+                "config".to_string(),
+                "--get".to_string(),
+                key.to_string(),
+            ])
+            .await
+        {
+            Ok(value) => Ok(Some(value)),
+            Err(e) => {
+                if e.to_string().contains("exit code: 1") {
+                    // Config key not found (git returns exit code 1)
+                    Ok(None)
+                } else {
+                    Err(e)
+                }
+            }
+        }
+    }
 
     /// Gets the name of the current git branch
     async fn get_current_branch(&self) -> Result<String> {
@@ -30,7 +123,10 @@ pub trait Git: Send + Sync {
     }
 
     /// Stages all changes in the working directory
-    async fn stage_all(&self) -> Result<String>;
+    async fn stage_all(&self) -> Result<String> {
+        self.execute(vec!["add".to_string(), "-A".to_string()])
+            .await
+    }
 
     /// Creates a commit with the given message
     ///
@@ -107,34 +203,178 @@ pub trait Git: Send + Sync {
         .await
     }
 
-    /// Gets a list of user WIP branches
+    /// Gets a list of WIP branches for a specific user
     async fn get_user_wip_branches(&self, username: &str) -> Result<Vec<String>> {
-        if username.is_empty() {
-            return Ok(Vec::new());
-        }
-
-        let all_branches = self
-            .execute(vec!["branch".to_string(), "-a".to_string()])
+        let output = Output::new().await?;
+        let git_output = self
+            .execute(vec![
+                "branch".to_string(),
+                "--all".to_string(),
+                "--format=%(refname:short)".to_string(),
+            ])
             .await?;
+
+        output.debug(&format!("Raw git output:\n{}", git_output))?;
+
         let wip_prefix = format!("wip/{}/", username);
+        output.debug(&format!("Looking for branches with prefix: {}", wip_prefix))?;
 
-        // Process branches concurrently
-        let branches = stream::iter(all_branches.lines())
-            .filter_map(|line| {
-                let wip_prefix = wip_prefix.clone();
-                async move {
-                    let trimmed = line.trim().replace("* ", "");
-                    if trimmed.contains(&wip_prefix) {
-                        Some(trimmed.replace("remotes/origin/", "").trim().to_string())
-                    } else {
-                        None
-                    }
-                }
-            })
+        let branches: Vec<String> = git_output
+            .lines()
+            .map(|line| line.trim().to_string())
+            .filter(|line| !line.is_empty())
+            .filter(|line| line.starts_with(&wip_prefix))
+            .map(|line| line.replace("remotes/origin/", ""))
             .collect::<HashSet<_>>()
-            .await;
+            .into_iter()
+            .collect();
 
-        Ok(branches.into_iter().collect())
+        output.debug(&format!("Found branches: {:?}", branches))?;
+        Ok(branches)
+    }
+
+    /// Verifies if a branch exists
+    async fn branch_exists(&self, branch: &str) -> Result<bool> {
+        self.execute(vec![
+            "rev-parse".to_string(),
+            "--verify".to_string(),
+            branch.to_string(),
+        ])
+        .await
+        .map(|_| true)
+        .or_else(|_| Ok(false))
+    }
+
+    /// Gets the last commit message from a branch
+    async fn get_commit_message(&self, branch: &str) -> Result<String> {
+        self.execute(vec![
+            "log".to_string(),
+            "-1".to_string(),
+            "--pretty=%B".to_string(),
+            branch.to_string(),
+        ])
+        .await
+    }
+
+    /// Stashes changes with a message
+    #[allow(dead_code)]
+    async fn stash_push(&self, message: &str) -> Result<String> {
+        self.execute(vec![
+            "stash".to_string(),
+            "push".to_string(),
+            "-m".to_string(),
+            message.to_string(),
+        ])
+        .await
+    }
+
+    /// Applies and removes the latest stash
+    #[allow(dead_code)]
+    async fn stash_pop(&self) -> Result<String> {
+        self.execute(vec!["stash".to_string(), "pop".to_string()])
+            .await
+    }
+
+    /// Deletes a branch locally
+    async fn delete_branch(&self, branch: &str, force: bool) -> Result<String> {
+        let flag = if force { "-D" } else { "-d" };
+        self.execute(vec![
+            "branch".to_string(),
+            flag.to_string(),
+            branch.to_string(),
+        ])
+        .await
+    }
+
+    /// Deletes a branch from a remote
+    async fn delete_remote_branch(&self, remote: &str, branch: &str) -> Result<String> {
+        self.execute(vec![
+            "push".to_string(),
+            remote.to_string(),
+            "--delete".to_string(),
+            branch.to_string(),
+        ])
+        .await
+    }
+
+    /// Lists all remotes
+    async fn get_remotes(&self) -> Result<Vec<String>> {
+        self.execute(vec!["remote".to_string()])
+            .await
+            .map(|output| output.lines().map(|s| s.to_string()).collect())
+    }
+
+    /// Stages specific files
+    async fn stage_files(&self, files: &[String]) -> Result<()> {
+        for file in files {
+            self.execute(vec!["add".to_string(), file.clone()]).await?;
+        }
+        Ok(())
+    }
+
+    /// Unstages specific files
+    async fn unstage_files(&self, files: &[String]) -> Result<()> {
+        for file in files {
+            self.execute(vec![
+                "reset".to_string(),
+                "HEAD".to_string(),
+                "--".to_string(),
+                file.clone(),
+            ])
+            .await?;
+        }
+        Ok(())
+    }
+
+    /// Resets the current branch to the previous commit
+    #[allow(dead_code)]
+    async fn reset_soft(&self) -> Result<String>;
+
+    /// Resets the current branch and working directory to HEAD
+    #[allow(dead_code)]
+    async fn reset_hard(&self) -> Result<String>;
+
+    /// Check if working tree is clean
+    #[allow(dead_code)]
+    async fn is_working_tree_clean(&self) -> Result<bool>;
+
+    /// Applies the latest stash without removing it
+    #[allow(dead_code)]
+    async fn stash_apply(&self) -> Result<String> {
+        self.execute(vec!["stash".to_string(), "apply".to_string()])
+            .await
+    }
+
+    /// Applies the latest stash with index state without removing it
+    #[allow(dead_code)]
+    async fn stash_apply_with_index(&self) -> Result<String> {
+        self.execute(vec![
+            "stash".to_string(),
+            "apply".to_string(),
+            "--index".to_string(),
+        ])
+        .await
+    }
+
+    /// Drops the latest stash
+    #[allow(dead_code)]
+    async fn stash_drop(&self) -> Result<String> {
+        self.execute(vec!["stash".to_string(), "drop".to_string()])
+            .await
+    }
+
+    /// Shows the content of a file from a specific branch
+    #[allow(dead_code)]
+    async fn show_file(&self, branch: &str, file: &str) -> Result<String> {
+        self.execute(vec!["show".to_string(), format!("{}:{}", branch, file)])
+            .await
+    }
+
+    /// Writes content to a file
+    #[allow(dead_code)]
+    async fn write_file(&self, file: &str, content: &str) -> Result<()> {
+        use tokio::fs;
+        fs::write(file, content).await.map_err(|e| e.into())
     }
 }
 
@@ -181,6 +421,64 @@ impl Git for GitCommand {
     async fn stage_all(&self) -> Result<String> {
         self.execute(vec!["add".to_string(), "-A".to_string()])
             .await
+    }
+
+    async fn get_user_wip_branches(&self, username: &str) -> Result<Vec<String>> {
+        let output = Output::new().await?;
+        let git_output = self
+            .execute(vec![
+                "branch".to_string(),
+                "--all".to_string(),
+                "--format=%(refname:short)".to_string(),
+            ])
+            .await?;
+
+        output.debug(&format!("Raw git output:\n{}", git_output))?;
+
+        let wip_prefix = format!("wip/{}/", username);
+        output.debug(&format!("Looking for branches with prefix: {}", wip_prefix))?;
+
+        let branches: Vec<String> = git_output
+            .lines()
+            .map(|line| line.trim().to_string())
+            .filter(|line| !line.is_empty())
+            .filter(|line| line.starts_with(&wip_prefix))
+            .map(|line| line.replace("remotes/origin/", ""))
+            .collect::<HashSet<_>>()
+            .into_iter()
+            .collect();
+
+        output.debug(&format!("Found branches: {:?}", branches))?;
+        Ok(branches)
+    }
+
+    async fn is_working_tree_clean(&self) -> Result<bool> {
+        let output = self
+            .execute(vec!["status".to_string(), "--porcelain".to_string()])
+            .await?;
+        Ok(output.trim().is_empty())
+    }
+
+    /// Resets the current branch to the previous commit
+    #[allow(dead_code)]
+    async fn reset_soft(&self) -> Result<String> {
+        self.execute(vec![
+            "reset".to_string(),
+            "--soft".to_string(),
+            "HEAD~".to_string(),
+        ])
+        .await
+    }
+
+    /// Resets the current branch and working directory to HEAD
+    #[allow(dead_code)]
+    async fn reset_hard(&self) -> Result<String> {
+        self.execute(vec![
+            "reset".to_string(),
+            "--hard".to_string(),
+            "HEAD".to_string(),
+        ])
+        .await
     }
 }
 

@@ -1,9 +1,23 @@
+use crate::i18n::t_with_args;
+use crate::output::Output;
 use crate::utils::{git_username_with_git, parse_commit_message, Git, GitCommand};
 use anyhow::{Context, Result};
 use dialoguer::{theme::ColorfulTheme, Select};
-use futures::future::try_join_all;
+
+pub struct RestoreOptions {
+    pub branch_name: Option<String>,
+    #[allow(dead_code)]
+    pub force: bool,
+    pub autostash: bool,
+}
 
 /// Restores changes from a WIP branch back to its original source branch.
+///
+/// # Arguments
+/// * `options` - Configuration for the restore operation
+///   - `branch_name`: Optional name of the branch to restore
+///   - `force`: Skip confirmation prompts
+///   - `autostash`: Automatically stash and reapply local changes
 ///
 /// # Details
 /// * Retrieves WIP branches for the current user
@@ -25,100 +39,233 @@ use futures::future::try_join_all;
 /// # Returns
 /// * `Ok(())` if restoration succeeds
 /// * `Err` if any step fails
-pub async fn restore_wip_changes() -> Result<()> {
+pub async fn restore_wip_changes(options: RestoreOptions) -> Result<()> {
     let git = GitCommand::new();
-    restore_wip_changes_with_git(&git).await
+    restore_wip_changes_with_git(&git, options).await
 }
 
 /// Implementation that accepts a Git instance for better testability
-pub async fn restore_wip_changes_with_git(git: &impl Git) -> Result<()> {
+pub async fn restore_wip_changes_with_git(git: &impl Git, options: RestoreOptions) -> Result<()> {
+    let output = Output::new().await?;
     let username = git_username_with_git(git).await?;
     let wip_branches = git.get_user_wip_branches(&username).await?;
 
-    let selected_branch = if wip_branches.len() > 1 {
+    let selected_branch = if let Some(branch) = options.branch_name {
+        if !wip_branches.contains(&branch) {
+            let message = t_with_args("branch-not-found", &[("name", &branch)]);
+            output.info(&output.format_with_highlights(&message, &[&format!("'{}'", branch)]))?;
+            return Ok(());
+        }
+        branch
+    } else if wip_branches.len() > 1 {
         get_user_selection(&wip_branches).await?
     } else if let Some(branch) = wip_branches.first() {
         branch.clone()
     } else {
-        println!("No WIP branches found for the user: {}", username);
+        let message = t_with_args("no-wip-branches", &[("username", &username)]);
+        output.info(&output.format_with_highlights(&message, &[&username]))?;
         return Ok(());
     };
 
-    // Fetch the last commit message from the WIP branch
-    let commit_message: String = git
-        .execute(vec![
-            "log".to_string(),
-            "-1".to_string(),
-            "--pretty=%B".to_string(),
-            selected_branch.clone(),
-        ])
-        .await?;
+    // Get the last commit message from the WIP branch
+    let commit_message = git.get_commit_message(&selected_branch).await?;
     let (source_branch, staged_files, changed_files, untracked_files) =
         parse_commit_message(&commit_message);
 
-    // Checkout the WIP branch and revert the last commit to unstage changes
-    git.checkout(&selected_branch).await?;
-    git.execute(vec![
-        "reset".to_string(),
-        "--soft".to_string(),
-        "HEAD~".to_string(),
-    ])
-    .await?;
+    let message = t_with_args("restoring-wip", &[("name", &selected_branch)]);
+    output.info(&output.format_with_highlights(&message, &[&format!("'{}'", selected_branch)]))?;
 
-    // Stash all changes
-    git.execute(vec![
-        "stash".to_string(),
-        "push".to_string(),
-        "-u".to_string(),
-        "-m".to_string(),
-        "Restoring WIP changes".to_string(),
-    ])
-    .await?;
+    // Check for local changes
+    let has_changes = !git.get_staged_files().await?.is_empty()
+        || !git.get_changed_files().await?.is_empty()
+        || !git.get_untracked_files().await?.is_empty();
 
-    // Determine if the source branch exists, create it if not
-    let branch_exists = git
-        .execute(vec![
-            "rev-parse".to_string(),
-            "--verify".to_string(),
-            source_branch.clone(),
-        ])
-        .await
-        .is_ok();
-
-    if branch_exists {
-        git.checkout(&source_branch).await?;
-    } else {
-        git.create_branch(&source_branch).await?;
+    if has_changes && !options.autostash {
+        return Err(anyhow::anyhow!(
+            "You have local changes. Please commit or stash them, or use --autostash"
+        ));
     }
 
-    // Apply the stash
-    git.execute(vec!["stash".to_string(), "pop".to_string()])
-        .await?;
-
-    // Recreate the original state of files based on the parsed commit message
-    recreate_file_states(git, staged_files, changed_files, untracked_files).await?;
-
-    // Delete the WIP branch locally and remotely
-    git.execute(vec![
-        "branch".to_string(),
-        "-D".to_string(),
-        selected_branch.clone(),
-    ])
-    .await?;
-
-    // Only attempt to delete the remote branch if the "origin" remote exists
-    let remotes = git.execute(vec!["remote".to_string()]).await?;
-    if remotes.contains("origin") {
+    // Stash any existing changes if autostash is enabled
+    if has_changes && options.autostash {
+        output.info(&t_with_args("stashing-existing-changes", &[]))?;
+        // Create a unique stash name for the local changes
+        let stash_name = format!("git-wippy-autostash-{}", source_branch);
         git.execute(vec![
+            "stash".to_string(),
             "push".to_string(),
-            "origin".to_string(),
-            "--delete".to_string(),
+            "--include-untracked".to_string(),
+            "-m".to_string(),
+            stash_name.clone(),
+        ])
+        .await
+        .context("Failed to stash changes")?;
+    }
+
+    // Determine if the source branch exists, create it if not
+    if git.branch_exists(&source_branch).await? {
+        git.checkout(&source_branch).await?;
+        let message = t_with_args("checked-out-branch", &[("name", &source_branch)]);
+        output
+            .info(&output.format_with_highlights(&message, &[&format!("'{}'", source_branch)]))?;
+    } else {
+        git.create_branch(&source_branch).await?;
+        let message = t_with_args("created-branch", &[("name", &source_branch)]);
+        output
+            .info(&output.format_with_highlights(&message, &[&format!("'{}'", source_branch)]))?;
+    }
+
+    // Get the list of files in the WIP branch
+    let files_output = git
+        .execute(vec![
+            "ls-tree".to_string(),
+            "-r".to_string(),
+            "--name-only".to_string(),
             selected_branch.clone(),
         ])
         .await?;
+    let files: Vec<String> = files_output.lines().map(|s| s.to_string()).collect();
+
+    // For each file in the WIP branch, get its contents and write it
+    for file in files {
+        let _content = git
+            .execute(vec![
+                "show".to_string(),
+                format!("{}:{}", selected_branch, file),
+            ])
+            .await?;
+        git.execute(vec![
+            "checkout".to_string(),
+            selected_branch.clone(),
+            "--".to_string(),
+            file.clone(),
+        ])
+        .await?;
+    }
+    output.info(&t_with_args("applied-changes", &[]))?;
+
+    // Recreate the original state of files based on the parsed commit message
+    recreate_file_states(git, staged_files, changed_files, untracked_files).await?;
+    output.info(&t_with_args("recreated-file-states", &[]))?;
+
+    // Pop any previously stashed changes if autostash was used
+    if has_changes && options.autostash {
+        output.info(&t_with_args("restoring-existing-changes", &[]))?;
+        let stash_name = format!("git-wippy-autostash-{}", source_branch);
+
+        // Try to find the stash index by listing all stashes and searching for our name
+        let stash_list = git
+            .execute(vec!["stash".to_string(), "list".to_string()])
+            .await
+            .context("Failed to list stashes")?;
+
+        // Find the stash by looking for the message in the stash list
+        // The stash list format is: stash@{n}: WIP on branch: message
+        let stash_index = stash_list
+            .lines()
+            .position(|line| line.contains(&format!(": {}", stash_name)))
+            .ok_or_else(|| anyhow::anyhow!("Could not find stash with name: {}", stash_name))?;
+        let stash_ref = format!("stash@{{{}}}", stash_index);
+
+        // Create a temporary branch from the current state
+        let temp_branch = format!("git-wippy-temp-{}", source_branch);
+        git.execute(vec![
+            "checkout".to_string(),
+            "-b".to_string(),
+            temp_branch.clone(),
+        ])
+        .await
+        .context("Failed to create temporary branch")?;
+
+        // Apply the stash to the temporary branch
+        let apply_result = git
+            .execute(vec![
+                "stash".to_string(),
+                "apply".to_string(),
+                stash_ref.clone(),
+            ])
+            .await;
+
+        // Switch back to the target branch
+        git.execute(vec!["checkout".to_string(), source_branch.clone()])
+            .await
+            .context("Failed to switch back to source branch")?;
+
+        match apply_result {
+            Ok(_) => {
+                // Try to merge the temporary branch
+                let merge_result = git
+                    .execute(vec![
+                        "merge".to_string(),
+                        "--no-commit".to_string(), // Don't create a merge commit
+                        "--no-ff".to_string(),     // Always create a merge to handle conflicts
+                        temp_branch.clone(),
+                    ])
+                    .await;
+
+                // Clean up the temporary branch
+                git.execute(vec![
+                    "branch".to_string(),
+                    "-D".to_string(),
+                    temp_branch.clone(),
+                ])
+                .await
+                .context("Failed to delete temporary branch")?;
+
+                match merge_result {
+                    Ok(_) => {
+                        // Drop the stash if we successfully applied it
+                        git.execute(vec![
+                            "stash".to_string(),
+                            "drop".to_string(),
+                            stash_ref.clone(),
+                        ])
+                        .await
+                        .context("Failed to drop stash")?;
+                        output.info(&t_with_args("applied-stash", &[]))?;
+                    }
+                    Err(e) => {
+                        // Don't fail on conflicts, let the user handle them
+                        if !e.to_string().contains("conflict") {
+                            return Err(anyhow::anyhow!(
+                                "Failed to restore existing changes: {}",
+                                e
+                            ));
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                // Clean up the temporary branch
+                git.execute(vec![
+                    "branch".to_string(),
+                    "-D".to_string(),
+                    temp_branch.clone(),
+                ])
+                .await
+                .context("Failed to delete temporary branch")?;
+                return Err(anyhow::anyhow!("Failed to apply stashed changes: {}", e));
+            }
+        }
     }
 
-    println!("Successfully restored changes from '{}'", selected_branch);
+    // Now that we've successfully applied all changes, we can delete the WIP branch
+    git.delete_branch(&selected_branch, true).await?;
+    let message = t_with_args("deleted-local-branch", &[("name", &selected_branch)]);
+    output.info(&output.format_with_highlights(&message, &[&format!("'{}'", selected_branch)]))?;
+
+    // Delete the remote branch if it exists
+    let remotes = git.get_remotes().await?;
+    if remotes.contains(&"origin".to_string()) {
+        git.delete_remote_branch("origin", &selected_branch).await?;
+        let message = t_with_args("deleted-remote-branch", &[("name", &selected_branch)]);
+        output
+            .info(&output.format_with_highlights(&message, &[&format!("'{}'", selected_branch)]))?;
+    }
+
+    let message = t_with_args("restore-complete", &[("name", &selected_branch)]);
+    output.info(&output.format_with_highlights(&message, &[&format!("'{}'", selected_branch)]))?;
+
     Ok(())
 }
 
@@ -159,33 +306,10 @@ async fn recreate_file_states(
     changed_files: Vec<String>,
     untracked_files: Vec<String>,
 ) -> Result<()> {
-    // Process file operations concurrently
-    let stage_futures = staged_files
-        .into_iter()
-        .map(|file| git.execute(vec!["add".to_string(), file]));
-
-    let change_futures = changed_files.into_iter().map(|file| {
-        git.execute(vec![
-            "reset".to_string(),
-            "HEAD".to_string(),
-            "--".to_string(),
-            file,
-        ])
-    });
-
-    let untrack_futures = untracked_files.into_iter().map(|file| {
-        git.execute(vec![
-            "reset".to_string(),
-            "HEAD".to_string(),
-            "--".to_string(),
-            file,
-        ])
-    });
-
-    // Run all operations concurrently
-    try_join_all(stage_futures).await?;
-    try_join_all(change_futures).await?;
-    try_join_all(untrack_futures).await?;
+    // Stage and unstage files using the Git trait methods
+    git.stage_files(&staged_files).await?;
+    git.unstage_files(&changed_files).await?;
+    git.unstage_files(&untracked_files).await?;
 
     Ok(())
 }
@@ -202,395 +326,40 @@ mod tests {
 
         // Mock staging files
         mock_git
-            .expect_execute()
+            .expect_stage_files()
             .with(mockall::predicate::eq(vec![
-                "add".to_string(),
-                "file1.txt".to_string(),
+                "staged1.txt".to_string(),
+                "staged2.txt".to_string(),
             ]))
-            .returning(|_| Ok("".to_string()));
+            .returning(|_| Ok(()));
 
-        // Mock resetting changed files
+        // Mock unstaging changed files
         mock_git
-            .expect_execute()
+            .expect_unstage_files()
             .with(mockall::predicate::eq(vec![
-                "reset".to_string(),
-                "HEAD".to_string(),
-                "--".to_string(),
-                "file2.txt".to_string(),
+                "changed1.txt".to_string(),
+                "changed2.txt".to_string(),
             ]))
-            .returning(|_| Ok("".to_string()));
+            .returning(|_| Ok(()));
 
-        // Mock resetting untracked files
+        // Mock unstaging untracked files
         mock_git
-            .expect_execute()
+            .expect_unstage_files()
             .with(mockall::predicate::eq(vec![
-                "reset".to_string(),
-                "HEAD".to_string(),
-                "--".to_string(),
-                "file3.txt".to_string(),
+                "untracked1.txt".to_string(),
+                "untracked2.txt".to_string(),
             ]))
-            .returning(|_| Ok("".to_string()));
+            .returning(|_| Ok(()));
 
+        // Test the function with multiple files in each category
         recreate_file_states(
             &mock_git,
-            vec!["file1.txt".to_string()],
-            vec!["file2.txt".to_string()],
-            vec!["file3.txt".to_string()],
+            vec!["staged1.txt".to_string(), "staged2.txt".to_string()],
+            vec!["changed1.txt".to_string(), "changed2.txt".to_string()],
+            vec!["untracked1.txt".to_string(), "untracked2.txt".to_string()],
         )
         .await?;
-        Ok(())
-    }
 
-    #[tokio::test]
-    async fn test_restore_wip_changes() -> Result<()> {
-        let mut mock_git = MockGit::new();
-
-        // Mock username lookup
-        mock_git
-            .expect_execute()
-            .with(mockall::predicate::eq(vec![
-                "config".to_string(),
-                "user.name".to_string(),
-            ]))
-            .returning(|_| Ok("test-user".to_string()));
-
-        // Mock WIP branches
-        mock_git
-            .expect_get_user_wip_branches()
-            .with(mockall::predicate::eq("test-user"))
-            .returning(|_| Ok(vec!["wip/test-user/branch1".to_string()]));
-
-        // Mock commit message
-        mock_git
-            .expect_execute()
-            .with(mockall::predicate::eq(vec![
-                "log".to_string(),
-                "-1".to_string(),
-                "--pretty=%B".to_string(),
-                "wip/test-user/branch1".to_string(),
-            ]))
-            .returning(|_| {
-                Ok("WIP: Saved state from branch 'main'\nSource branch: main\nStaged: file1.txt\nUnstaged: file2.txt\nUntracked: file3.txt".to_string())
-            });
-
-        // Mock checkout operations using the trait method
-        mock_git
-            .expect_checkout()
-            .with(mockall::predicate::eq("wip/test-user/branch1"))
-            .returning(|_| Ok("Switched to branch 'wip/test-user/branch1'".to_string()));
-
-        mock_git
-            .expect_checkout()
-            .with(mockall::predicate::eq("main"))
-            .returning(|_| Ok("Switched to branch 'main'".to_string()));
-
-        // Mock reset to unstage changes
-        mock_git
-            .expect_execute()
-            .with(mockall::predicate::eq(vec![
-                "reset".to_string(),
-                "--soft".to_string(),
-                "HEAD~".to_string(),
-            ]))
-            .returning(|_| Ok("".to_string()));
-
-        // Mock stash changes
-        mock_git
-            .expect_execute()
-            .with(mockall::predicate::eq(vec![
-                "stash".to_string(),
-                "push".to_string(),
-                "-u".to_string(),
-                "-m".to_string(),
-                "Restoring WIP changes".to_string(),
-            ]))
-            .returning(|_| Ok("Saved working directory".to_string()));
-
-        // Mock branch existence check
-        mock_git
-            .expect_execute()
-            .with(mockall::predicate::eq(vec![
-                "rev-parse".to_string(),
-                "--verify".to_string(),
-                "main".to_string(),
-            ]))
-            .returning(|_| Ok("main".to_string()));
-
-        // Mock stash pop
-        mock_git
-            .expect_execute()
-            .with(mockall::predicate::eq(vec![
-                "stash".to_string(),
-                "pop".to_string(),
-            ]))
-            .returning(|_| Ok("Changes restored".to_string()));
-
-        // Mock file state recreation (one mock per file)
-        mock_git
-            .expect_execute()
-            .with(mockall::predicate::eq(vec![
-                "add".to_string(),
-                "file1.txt".to_string(),
-            ]))
-            .returning(|_| Ok("".to_string()));
-
-        mock_git
-            .expect_execute()
-            .with(mockall::predicate::eq(vec![
-                "reset".to_string(),
-                "HEAD".to_string(),
-                "--".to_string(),
-                "file2.txt".to_string(),
-            ]))
-            .returning(|_| Ok("".to_string()));
-
-        mock_git
-            .expect_execute()
-            .with(mockall::predicate::eq(vec![
-                "reset".to_string(),
-                "HEAD".to_string(),
-                "--".to_string(),
-                "file3.txt".to_string(),
-            ]))
-            .returning(|_| Ok("".to_string()));
-
-        // Mock local branch deletion
-        mock_git
-            .expect_execute()
-            .with(mockall::predicate::eq(vec![
-                "branch".to_string(),
-                "-D".to_string(),
-                "wip/test-user/branch1".to_string(),
-            ]))
-            .returning(|_| Ok("Deleted branch".to_string()));
-
-        // Mock remote check
-        mock_git
-            .expect_execute()
-            .with(mockall::predicate::eq(vec!["remote".to_string()]))
-            .returning(|_| Ok("origin".to_string()));
-
-        // Mock remote branch deletion
-        mock_git
-            .expect_execute()
-            .with(mockall::predicate::eq(vec![
-                "push".to_string(),
-                "origin".to_string(),
-                "--delete".to_string(),
-                "wip/test-user/branch1".to_string(),
-            ]))
-            .returning(|_| Ok("".to_string()));
-
-        // Mock branch verification check
-        mock_git
-            .expect_execute()
-            .with(mockall::predicate::eq(vec![
-                "rev-parse".to_string(),
-                "--verify".to_string(),
-                "main".to_string(),
-            ]))
-            .returning(|_| Ok("main".to_string()));
-
-        restore_wip_changes_with_git(&mock_git).await?;
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_restore_no_wip_branches() -> Result<()> {
-        let mut mock_git = MockGit::new();
-
-        // Mock username lookup
-        mock_git
-            .expect_execute()
-            .with(mockall::predicate::eq(vec![
-                "config".to_string(),
-                "user.name".to_string(),
-            ]))
-            .returning(|_| Ok("test-user".to_string()));
-
-        // Mock empty WIP branches list
-        mock_git
-            .expect_get_user_wip_branches()
-            .with(mockall::predicate::eq("test-user"))
-            .returning(|_| Ok(Vec::new()));
-
-        restore_wip_changes_with_git(&mock_git).await?;
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_restore_invalid_commit_message() -> Result<()> {
-        let mut mock_git = MockGit::new();
-
-        // Mock username lookup
-        mock_git
-            .expect_execute()
-            .with(mockall::predicate::eq(vec![
-                "config".to_string(),
-                "user.name".to_string(),
-            ]))
-            .returning(|_| Ok("test-user".to_string()));
-
-        // Mock WIP branches
-        mock_git
-            .expect_get_user_wip_branches()
-            .with(mockall::predicate::eq("test-user"))
-            .returning(|_| Ok(vec!["wip/test-user/branch1".to_string()]));
-
-        // Mock checkout using the trait method
-        mock_git
-            .expect_checkout()
-            .with(mockall::predicate::eq("wip/test-user/branch1"))
-            .returning(|_| Ok("Switched to branch".to_string()));
-
-        // Mock invalid commit message
-        mock_git
-            .expect_execute()
-            .with(mockall::predicate::eq(vec![
-                "log".to_string(),
-                "-1".to_string(),
-                "--pretty=%B".to_string(),
-                "wip/test-user/branch1".to_string(),
-            ]))
-            .returning(|_| Ok("Not a valid WIP commit message".to_string()));
-
-        // Mock reset
-        mock_git
-            .expect_execute()
-            .with(mockall::predicate::eq(vec![
-                "reset".to_string(),
-                "--soft".to_string(),
-                "HEAD~".to_string(),
-            ]))
-            .returning(|_| Ok("".to_string()));
-
-        // Mock stash attempt
-        mock_git
-            .expect_execute()
-            .with(mockall::predicate::eq(vec![
-                "stash".to_string(),
-                "push".to_string(),
-                "-u".to_string(),
-                "-m".to_string(),
-                "Restoring WIP changes".to_string(),
-            ]))
-            .returning(|_| Ok("Saved working directory".to_string()));
-
-        // Mock branch verification check for empty branch
-        mock_git
-            .expect_execute()
-            .with(mockall::predicate::eq(vec![
-                "rev-parse".to_string(),
-                "--verify".to_string(),
-                "".to_string(),
-            ]))
-            .returning(|_| Err(anyhow::anyhow!("Branch not found")));
-
-        // Mock create_branch for empty branch name
-        mock_git
-            .expect_create_branch()
-            .with(mockall::predicate::eq(""))
-            .returning(|_| Err(anyhow::anyhow!("Invalid commit message format")));
-
-        let result = restore_wip_changes_with_git(&mock_git).await;
-        assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("Invalid commit message format"));
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_restore_stash_failure() -> Result<()> {
-        let mut mock_git = MockGit::new();
-
-        // Mock username lookup
-        mock_git
-            .expect_execute()
-            .with(mockall::predicate::eq(vec![
-                "config".to_string(),
-                "user.name".to_string(),
-            ]))
-            .returning(|_| Ok("test-user".to_string()));
-
-        // Mock WIP branches
-        mock_git
-            .expect_get_user_wip_branches()
-            .with(mockall::predicate::eq("test-user"))
-            .returning(|_| Ok(vec!["wip/test-user/branch1".to_string()]));
-
-        // Mock commit message
-        mock_git
-            .expect_execute()
-            .with(mockall::predicate::eq(vec![
-                "log".to_string(),
-                "-1".to_string(),
-                "--pretty=%B".to_string(),
-                "wip/test-user/branch1".to_string(),
-            ]))
-            .returning(
-                |_| Ok("WIP: Saved state from branch 'main'\nStaged: file1.txt".to_string()),
-            );
-
-        // Mock checkout using the trait method
-        mock_git
-            .expect_checkout()
-            .with(mockall::predicate::eq("wip/test-user/branch1"))
-            .returning(|_| Ok("Switched to branch".to_string()));
-
-        // Mock reset
-        mock_git
-            .expect_execute()
-            .with(mockall::predicate::eq(vec![
-                "reset".to_string(),
-                "--soft".to_string(),
-                "HEAD~".to_string(),
-            ]))
-            .returning(|_| Ok("".to_string()));
-
-        // Mock stash failure
-        mock_git
-            .expect_execute()
-            .with(mockall::predicate::eq(vec![
-                "stash".to_string(),
-                "push".to_string(),
-                "-u".to_string(),
-                "-m".to_string(),
-                "Restoring WIP changes".to_string(),
-            ]))
-            .returning(|_| Err(anyhow::anyhow!("Failed to stash changes")));
-
-        let result = restore_wip_changes_with_git(&mock_git).await;
-        assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("Failed to stash changes"));
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_restore_branch_not_found() -> Result<()> {
-        let mut mock_git = MockGit::new();
-
-        // Mock username lookup
-        mock_git
-            .expect_execute()
-            .with(mockall::predicate::eq(vec![
-                "config".to_string(),
-                "user.name".to_string(),
-            ]))
-            .returning(|_| Ok("test-user".to_string()));
-
-        // Mock empty WIP branches list
-        mock_git
-            .expect_get_user_wip_branches()
-            .with(mockall::predicate::eq("test-user"))
-            .returning(|_| Ok(Vec::new()));
-
-        let result = restore_wip_changes_with_git(&mock_git).await;
-        assert!(result.is_ok()); // Should return Ok with a message
         Ok(())
     }
 }

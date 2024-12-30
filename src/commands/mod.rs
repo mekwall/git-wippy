@@ -1,17 +1,17 @@
-//! Command implementations for git-wippy
+//! Command implementations for git-wippy.
 //!
-//! This module contains the main command implementations that provide
-//! the core functionality of git-wippy:
+//! This module contains the core functionality for managing WIP (Work In Progress) branches:
 //!
-//! * `list` - Lists all WIP branches for the current user
-//! * `save` - Saves current changes to a WIP branch
-//! * `restore` - Restores changes from a WIP branch back to original branch
+//! - `save`: Creates a WIP branch with the current changes
+//! - `list`: Shows all WIP branches for the current user
+//! - `restore`: Restores changes from a WIP branch back to the original branch
+//! - `delete`: Removes WIP branches locally and/or remotely
+//!
+//! Each command is implemented in its own submodule and follows a pattern of having
+//! both a public interface function and a testable implementation that accepts a
+//! Git trait object.
 
 pub mod delete;
 pub mod list;
 pub mod restore;
 pub mod save;
-
-pub use list::list_wip_branches;
-pub use restore::restore_wip_changes;
-pub use save::save_wip_changes;

@@ -2,13 +2,30 @@ use chrono::Local;
 
 /// Returns the current datetime formatted for use in branch names.
 ///
+/// The datetime is formatted in a Git-friendly format that:
+/// - Is sortable chronologically
+/// - Contains no special characters that would be invalid in Git branch names
+/// - Is human-readable
+///
 /// # Format
-/// Returns datetime in the format: YYYY-MM-DD-HH-mm-ss
-/// Example: 2024-03-14-15-30-45
+///
+/// The format is: `YYYY-MM-DD-HH-mm-SS`
+///
+/// For example: `2024-03-14-15-30-45`
+///
+/// # Examples
+///
+/// ```
+/// use git_wippy::formatted_datetime;
+///
+/// let datetime = formatted_datetime();
+/// assert!(datetime.len() == 19); // YYYY-MM-DD-HH-mm-SS
+/// ```
 ///
 /// # Usage
-/// This is typically used to create unique WIP branch names by combining
-/// with the username: wip/{username}/{formatted_datetime}
+///
+/// This function is typically used to create unique WIP branch names by combining
+/// with the username: `wip/{username}/{formatted_datetime}`
 pub fn formatted_datetime() -> String {
     Local::now().format("%Y-%m-%d-%H-%M-%S").to_string()
 }

@@ -1,43 +1,30 @@
+use crate::i18n::t_with_args;
+use crate::output::Output;
 use crate::utils::{git_username_with_git, Git, GitCommand};
 use anyhow::Result;
 
-/// Lists all WIP branches for the current Git user.
-///
-/// # Details
-/// * Retrieves the current Git username
-/// * Finds all branches matching the pattern "wip/{username}/*"
-/// * Displays the branches in a formatted list
-/// * Shows a message if no WIP branches are found
-///
-/// # Returns
-/// * `Ok(())` if the operation succeeds
-/// * `Err` if username retrieval or branch listing fails
 pub async fn list_wip_branches() -> Result<()> {
     let git = GitCommand::new();
     list_wip_branches_with_git(&git).await
 }
 
-/// Implementation that accepts a Git instance for better testability
 pub async fn list_wip_branches_with_git(git: &impl Git) -> Result<()> {
+    let output = Output::new().await?;
     let username = git_username_with_git(git).await?;
     let wip_branches = git.get_user_wip_branches(&username).await?;
 
     if wip_branches.is_empty() {
-        println!("No WIP branches found for the user: {}", username);
-    } else {
-        println!("WIP branches for user '{}':", username);
-        for branch in &wip_branches {
-            // Get commit message for each branch
-            let commit_msg = git
-                .execute(vec![
-                    "log".to_string(),
-                    "-1".to_string(),
-                    "--pretty=%B".to_string(),
-                    branch.clone(),
-                ])
-                .await?;
-            println!("- {} ({})", branch, commit_msg.lines().next().unwrap_or(""));
-        }
+        let message = t_with_args("no-wip-branches", &[("username", &username)]);
+        output.info(&output.format_with_highlights(&message, &[&username]))?;
+        return Ok(());
+    }
+
+    output.info(&t_with_args("found-wip-branches", &[]))?;
+    for branch in wip_branches {
+        output.info(&output.format_with_highlights(
+            &t_with_args("branch-name", &[("name", &branch)]),
+            &[&branch],
+        ))?;
     }
 
     Ok(())
@@ -65,25 +52,7 @@ mod tests {
         mock_git
             .expect_get_user_wip_branches()
             .with(mockall::predicate::eq("test-user"))
-            .returning(|_| {
-                Ok(vec![
-                    "wip/test-user/branch1".to_string(),
-                    "wip/test-user/branch2".to_string(),
-                ])
-            });
-
-        // Mock getting commit messages for each branch
-        for branch in ["wip/test-user/branch1", "wip/test-user/branch2"] {
-            mock_git
-                .expect_execute()
-                .with(mockall::predicate::eq(vec![
-                    "log".to_string(),
-                    "-1".to_string(),
-                    "--pretty=%B".to_string(),
-                    branch.to_string(),
-                ]))
-                .returning(|_| Ok("WIP: Saved state from branch 'main'".to_string()));
-        }
+            .returning(|_| Ok(vec!["wip/test-user/branch1".to_string()]));
 
         list_wip_branches_with_git(&mock_git).await?;
         Ok(())
@@ -102,11 +71,11 @@ mod tests {
             ]))
             .returning(|_| Ok("test-user".to_string()));
 
-        // Mock empty WIP branches list
+        // Mock WIP branches (empty)
         mock_git
             .expect_get_user_wip_branches()
             .with(mockall::predicate::eq("test-user"))
-            .returning(|_| Ok(Vec::new()));
+            .returning(|_| Ok(vec![]));
 
         list_wip_branches_with_git(&mock_git).await?;
         Ok(())

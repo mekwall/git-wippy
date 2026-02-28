@@ -1,6 +1,6 @@
 use crate::i18n::t_with_args;
 use crate::output::Output;
-use crate::utils::{git_username_with_git, Git, GitCommand};
+use crate::utils::{Git, GitCommand, git_username_with_git};
 use anyhow::Result;
 
 pub async fn list_wip_branches(all: bool) -> Result<()> {

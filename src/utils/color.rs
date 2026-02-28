@@ -15,14 +15,14 @@ use std::io::IsTerminal;
 /// 1. Git's color.ui is set to "always", or
 /// 2. Git's color.ui is "auto" (default) and:
 ///    - Output is to a terminal
-///    - NO_COLOR environment variable is not set
+///    - `NO_COLOR` environment variable is not set
 ///    - TERM is not "dumb"
 pub struct ColorConfig {
     enabled: bool,
 }
 
 impl ColorConfig {
-    /// Creates a new ColorConfig instance asynchronously with settings determined from the environment.
+    /// Creates a new `ColorConfig` instance asynchronously with settings determined from the environment.
     ///
     /// # Examples
     ///
@@ -38,7 +38,7 @@ impl ColorConfig {
         Self::new_with_git(&git).await
     }
 
-    /// Creates a new ColorConfig instance with a specific Git implementation.
+    /// Creates a new `ColorConfig` instance with a specific Git implementation.
     pub(crate) async fn new_with_git(git: &impl Git) -> Self {
         let mut config = Self { enabled: false };
         config.init(git).await;
@@ -51,16 +51,16 @@ impl ColorConfig {
             && env::var("NO_COLOR").is_err()
             && env::var("TERM").map(|t| t != "dumb").unwrap_or(true);
 
-        if let Ok(Some(value)) = git.get_config_value("color.ui").await {
-            match value.as_str() {
+        match git.get_config_value("color.ui").await {
+            Ok(Some(value)) => match value.as_str() {
                 "always" => self.enabled = true,
-                "never" => self.enabled = false,
                 "auto" | "" => self.enabled = auto_color,
                 _ => self.enabled = false,
+            },
+            _ => {
+                // If no color configuration is found, use auto behavior
+                self.enabled = auto_color;
             }
-        } else {
-            // If no color configuration is found, use auto behavior
-            self.enabled = auto_color;
         }
     }
 
@@ -89,6 +89,7 @@ impl ColorConfig {
 /// - Red: Errors and warnings
 /// - Green: Success and info messages
 /// - Yellow: Branch names and important values
+#[derive(Clone, Copy)]
 pub enum Color {
     /// Red color for errors and warnings
     Red,
@@ -98,17 +99,18 @@ pub enum Color {
     /// Yellow color for branch names and important values
     Yellow,
     /// Gray color for branch names and important values
+    #[allow(dead_code)]
     Gray,
 }
 
 impl Color {
     /// Returns the ANSI escape code for the color.
-    fn ansi_code(&self) -> &str {
+    const fn ansi_code(&self) -> &str {
         match self {
-            Color::Red => "\x1b[31m",
-            Color::Green => "\x1b[32m",
-            Color::Yellow => "\x1b[33m",
-            Color::Gray => "\x1b[90m",
+            Self::Red => "\x1b[31m",
+            Self::Green => "\x1b[32m",
+            Self::Yellow => "\x1b[33m",
+            Self::Gray => "\x1b[90m",
         }
     }
 }
@@ -164,7 +166,7 @@ mod tests {
         mock_git
             .expect_get_config_value()
             .with(mockall::predicate::eq("color.ui"))
-            .returning(|_| Ok(Some("".to_string())));
+            .returning(|_| Ok(Some(String::new())));
 
         let config = ColorConfig::new_with_git(&mock_git).await;
         assert!(

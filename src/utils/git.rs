@@ -214,10 +214,10 @@ pub trait Git: Send + Sync {
             ])
             .await?;
 
-        output.debug(&format!("Raw git output:\n{}", git_output))?;
+        output.debug(&format!("Raw git output:\n{git_output}"))?;
 
-        let wip_prefix = format!("wip/{}/", username);
-        output.debug(&format!("Looking for branches with prefix: {}", wip_prefix))?;
+        let wip_prefix = format!("wip/{username}/");
+        output.debug(&format!("Looking for branches with prefix: {wip_prefix}"))?;
 
         let branches: Vec<String> = git_output
             .lines()
@@ -229,7 +229,7 @@ pub trait Git: Send + Sync {
             .into_iter()
             .collect();
 
-        output.debug(&format!("Found branches: {:?}", branches))?;
+        output.debug(&format!("Found branches: {branches:?}"))?;
         Ok(branches)
     }
 
@@ -243,7 +243,7 @@ pub trait Git: Send + Sync {
             ])
             .await?;
 
-        output.debug(&format!("Raw git output:\n{}", git_output))?;
+        output.debug(&format!("Raw git output:\n{git_output}"))?;
 
         let branches: Vec<String> = git_output
             .lines()
@@ -255,7 +255,7 @@ pub trait Git: Send + Sync {
             .into_iter()
             .collect();
 
-        output.debug(&format!("Found all-user branches: {:?}", branches))?;
+        output.debug(&format!("Found all-user branches: {branches:?}"))?;
         Ok(branches)
     }
 
@@ -327,7 +327,12 @@ pub trait Git: Send + Sync {
     async fn get_remotes(&self) -> Result<Vec<String>> {
         self.execute(vec!["remote".to_string()])
             .await
-            .map(|output| output.lines().map(|s| s.to_string()).collect())
+            .map(|output| {
+                output
+                    .lines()
+                    .map(std::string::ToString::to_string)
+                    .collect()
+            })
     }
 
     /// Stages specific files
@@ -400,7 +405,9 @@ pub trait Git: Send + Sync {
     #[allow(dead_code)]
     async fn write_file(&self, file: &str, content: &str) -> Result<()> {
         use tokio::fs;
-        fs::write(file, content).await.map_err(|e| e.into())
+        fs::write(file, content)
+            .await
+            .map_err(std::convert::Into::into)
     }
 }
 
@@ -410,8 +417,8 @@ pub trait Git: Send + Sync {
 pub struct GitCommand(());
 
 impl GitCommand {
-    /// Creates a new thread-safe GitCommand instance
-    pub fn new() -> Self {
+    /// Creates a new thread-safe `GitCommand` instance
+    pub const fn new() -> Self {
         Self(())
     }
 }
@@ -430,7 +437,7 @@ impl Git for GitCommand {
             .kill_on_drop(true)
             .output()
             .await
-            .context(format!("Failed to execute git command: {:?}", args))?;
+            .context(format!("Failed to execute git command: {args:?}"))?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -459,10 +466,10 @@ impl Git for GitCommand {
             ])
             .await?;
 
-        output.debug(&format!("Raw git output:\n{}", git_output))?;
+        output.debug(&format!("Raw git output:\n{git_output}"))?;
 
-        let wip_prefix = format!("wip/{}/", username);
-        output.debug(&format!("Looking for branches with prefix: {}", wip_prefix))?;
+        let wip_prefix = format!("wip/{username}/");
+        output.debug(&format!("Looking for branches with prefix: {wip_prefix}"))?;
 
         let branches: Vec<String> = git_output
             .lines()
@@ -474,7 +481,7 @@ impl Git for GitCommand {
             .into_iter()
             .collect();
 
-        output.debug(&format!("Found branches: {:?}", branches))?;
+        output.debug(&format!("Found branches: {branches:?}"))?;
         Ok(branches)
     }
 
@@ -488,7 +495,7 @@ impl Git for GitCommand {
             ])
             .await?;
 
-        output.debug(&format!("Raw git output:\n{}", git_output))?;
+        output.debug(&format!("Raw git output:\n{git_output}"))?;
 
         let branches: Vec<String> = git_output
             .lines()
@@ -500,7 +507,7 @@ impl Git for GitCommand {
             .into_iter()
             .collect();
 
-        output.debug(&format!("Found all-user branches: {:?}", branches))?;
+        output.debug(&format!("Found all-user branches: {branches:?}"))?;
         Ok(branches)
     }
 
@@ -570,19 +577,19 @@ mod tests {
         // Test stage_all
         mock.expect_stage_all()
             .times(1)
-            .returning(|| Ok("".to_string()));
+            .returning(|| Ok(String::new()));
 
         // Test commit
         mock.expect_commit()
             .with(mockall::predicate::eq("test message"))
             .times(1)
-            .returning(|_| Ok("".to_string()));
+            .returning(|_| Ok(String::new()));
 
         // Test checkout
         mock.expect_checkout()
             .with(mockall::predicate::eq("test-branch"))
             .times(1)
-            .returning(|_| Ok("".to_string()));
+            .returning(|_| Ok(String::new()));
 
         // Execute tests in order
         assert!(mock.stage_all().await.is_ok());

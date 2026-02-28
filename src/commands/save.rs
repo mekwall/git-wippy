@@ -1,6 +1,6 @@
 use crate::i18n::t;
 use crate::output::Output;
-use crate::utils::{formatted_datetime, git_username_with_git, Git, GitCommand};
+use crate::utils::{Git, GitCommand, formatted_datetime, git_username_with_git};
 use anyhow::Result;
 
 pub async fn save_wip_changes(
@@ -27,12 +27,9 @@ pub async fn save_wip_changes_with_git(
         Some(u) => u,
         None => git_username_with_git(git).await?,
     };
-    let datetime = match datetime {
-        Some(d) => d,
-        None => formatted_datetime(),
-    };
+    let datetime = datetime.unwrap_or_else(formatted_datetime);
 
-    let branch_name = format!("wip/{}/{}", username, datetime);
+    let branch_name = format!("wip/{username}/{datetime}");
 
     // Store the current branch name before switching
     let original_branch = git.get_current_branch().await?;
@@ -45,7 +42,7 @@ pub async fn save_wip_changes_with_git(
     // Create and switch to the new branch
     git.create_branch(&branch_name).await?;
     output.info(
-        &output.format_with_highlights(&t("created-branch"), &[&format!("'{}'", branch_name)]),
+        &output.format_with_highlights(&t("created-branch"), &[&format!("'{branch_name}'")]),
     )?;
 
     git.stage_all().await?;
@@ -57,21 +54,21 @@ pub async fn save_wip_changes_with_git(
     if !local {
         // Check if there are any remotes configured
         let remotes = git.get_remotes().await?;
-        if !remotes.is_empty() {
+        if remotes.is_empty() {
+            output.info(&t("skipped-push-no-remote"))?;
+        } else {
             git.push("origin", &branch_name).await?;
             output.info(&t("pushed-changes"))?;
-        } else {
-            output.info(&t("skipped-push-no-remote"))?;
         }
     }
 
     git.checkout(&original_branch).await?;
     output.info(
-        &output.format_with_highlights(&t("switched-back"), &[&format!("'{}'", original_branch)]),
+        &output.format_with_highlights(&t("switched-back"), &[&format!("'{original_branch}'")]),
     )?;
 
     output.info(
-        &output.format_with_highlights(&t("wip-branch-created"), &[&format!("'{}'", branch_name)]),
+        &output.format_with_highlights(&t("wip-branch-created"), &[&format!("'{branch_name}'")]),
     )?;
     Ok(())
 }
@@ -82,29 +79,28 @@ async fn generate_commit_message(git: &impl Git, message: Option<String>) -> Res
     let untracked = git.get_untracked_files().await?;
     let source_branch = git.get_current_branch().await?;
 
-    let staged_section = if !staged.is_empty() {
-        format!("\nStaged changes:\n\t{}", staged.replace("\n", "\n\t"))
-    } else {
+    let staged_section = if staged.is_empty() {
         String::new()
+    } else {
+        format!("\nStaged changes:\n\t{}", staged.replace('\n', "\n\t"))
     };
 
-    let changed_section = if !changed.is_empty() {
-        format!("\nChanges:\n\t{}", changed.replace("\n", "\n\t"))
-    } else {
+    let changed_section = if changed.is_empty() {
         String::new()
+    } else {
+        format!("\nChanges:\n\t{}", changed.replace('\n', "\n\t"))
     };
 
-    let untracked_section = if !untracked.is_empty() {
-        format!("\nUntracked:\n\t{}", untracked.replace("\n", "\n\t"))
-    } else {
+    let untracked_section = if untracked.is_empty() {
         String::new()
+    } else {
+        format!("\nUntracked:\n\t{}", untracked.replace('\n', "\n\t"))
     };
 
     let header = message.unwrap_or_else(|| "chore: saving work in progress".to_string());
 
     let message = format!(
-        "{}\n\nSource branch: {}{}{}{}",
-        header, source_branch, staged_section, changed_section, untracked_section
+        "{header}\n\nSource branch: {source_branch}{staged_section}{changed_section}{untracked_section}"
     );
 
     Ok(message)

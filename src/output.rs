@@ -21,7 +21,7 @@ use anyhow::Result;
 ///     Ok(())
 /// }
 /// ```
-pub(crate) struct Output {
+pub struct Output {
     color: ColorConfig,
 }
 
@@ -34,38 +34,42 @@ impl Output {
     }
 
     /// Normalize text by removing bidirectional control characters
-    fn normalize_text(&self, text: &str) -> String {
-        text.replace('\u{2068}', "").replace('\u{2069}', "")
+    fn normalize_text(text: &str) -> String {
+        text.replace(['\u{2068}', '\u{2069}'], "")
     }
 
     /// Prints an informational message in green.
+    #[allow(clippy::unused_self)]
+    #[allow(clippy::unnecessary_wraps)]
     pub fn info(&self, message: &str) -> Result<()> {
         if !message.is_empty() {
-            print!("{}\n", self.normalize_text(message));
+            println!("{}", Self::normalize_text(message));
         }
         Ok(())
     }
 
     /// Prints a warning message in yellow.
     #[allow(dead_code)]
+    #[allow(clippy::unnecessary_wraps)]
     pub fn warning(&self, message: &str) -> Result<()> {
         if !message.is_empty() {
-            print!(
-                "{}\n",
+            println!(
+                "{}",
                 self.color
-                    .colorize(&self.normalize_text(message), Color::Yellow)
+                    .colorize(&Self::normalize_text(message), Color::Yellow)
             );
         }
         Ok(())
     }
 
     /// Prints an error message in red.
+    #[allow(clippy::unnecessary_wraps)]
     pub fn error(&self, message: &str) -> Result<()> {
         if !message.is_empty() {
-            eprint!(
-                "{}\n",
+            eprintln!(
+                "{}",
                 self.color
-                    .colorize(&self.normalize_text(message), Color::Red)
+                    .colorize(&Self::normalize_text(message), Color::Red)
             );
         }
         Ok(())
@@ -73,14 +77,18 @@ impl Output {
 
     /// Prints a debug message in gray, only in debug builds.
     /// In release builds, this is a no-op.
+    #[allow(clippy::unnecessary_wraps)]
     pub fn debug(&self, message: &str) -> Result<()> {
+        #[cfg(not(debug_assertions))]
+        let _ = message;
+
         #[cfg(debug_assertions)]
         if !message.is_empty() {
-            let debug_msg = format!("[DEBUG] {}", message);
-            eprint!(
-                "{}\n",
+            let debug_msg = format!("[DEBUG] {message}");
+            eprintln!(
+                "{}",
                 self.color
-                    .colorize(&self.normalize_text(&debug_msg), Color::Gray)
+                    .colorize(&Self::normalize_text(&debug_msg), Color::Gray)
             );
         }
         Ok(())
@@ -89,7 +97,7 @@ impl Output {
     /// Highlights a piece of text in yellow, useful for branch names and values.
     pub fn highlight(&self, text: &str) -> String {
         self.color
-            .colorize(&self.normalize_text(text), Color::Yellow)
+            .colorize(&Self::normalize_text(text), Color::Yellow)
     }
 
     /// Formats a message with highlighted parts.
@@ -119,17 +127,18 @@ impl Output {
         for highlight in highlights {
             result = result.replace(highlight, &self.highlight(highlight));
         }
-        self.normalize_text(&result)
+        Self::normalize_text(&result)
     }
 
     /// Prints a warning message in yellow.
     #[allow(dead_code)]
+    #[allow(clippy::unnecessary_wraps)]
     pub fn warn(&self, message: &str) -> Result<()> {
         if !message.is_empty() {
-            eprint!(
-                "{}\n",
+            eprintln!(
+                "{}",
                 self.color
-                    .colorize(&self.normalize_text(message), Color::Yellow)
+                    .colorize(&Self::normalize_text(message), Color::Yellow)
             );
         }
         Ok(())

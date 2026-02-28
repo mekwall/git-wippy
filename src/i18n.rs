@@ -26,8 +26,8 @@ pub type Args<'a> = &'a [(&'a str, &'a str)];
 ///
 /// The locale is determined by checking these variables in order:
 /// 1. LANG
-/// 2. LC_ALL
-/// 3. LC_MESSAGES
+/// 2. `LC_ALL`
+/// 3. `LC_MESSAGES`
 ///
 /// If none are set, defaults to English (en-US).
 pub struct I18n {
@@ -62,7 +62,10 @@ impl I18n {
 
         let resource_path = match (
             lang_id.language.as_str(),
-            lang_id.region.as_ref().map(|r| r.as_str()),
+            lang_id
+                .region
+                .as_ref()
+                .map(unic_langid::subtags::Region::as_str),
         ) {
             ("en", Some("GB")) => include_str!("../locales/en-GB.ftl"),
             ("de", Some("DE") | None) => include_str!("../locales/de-DE.ftl"),
@@ -86,11 +89,11 @@ impl I18n {
         let msg = self
             .bundle
             .get_message(key)
-            .with_context(|| format!("Message '{}' not found in bundle", key))?;
+            .with_context(|| format!("Message '{key}' not found in bundle"))?;
 
         let pattern = msg
             .value()
-            .with_context(|| format!("No value for message '{}'", key))?;
+            .with_context(|| format!("No value for message '{key}'"))?;
 
         let mut fluent_args = FluentArgs::new();
         if let Some(args) = args {
@@ -106,9 +109,7 @@ impl I18n {
 
         if !errors.is_empty() {
             return Err(anyhow::anyhow!(
-                "Error formatting message '{}': {:?}",
-                key,
-                errors
+                "Error formatting message '{key}': {errors:?}"
             ));
         }
 
@@ -128,7 +129,7 @@ pub fn t(key: &str) -> String {
 
 // t() function with args
 pub fn t_with_args(key: &str, args: Args) -> String {
-    let args_map: HashMap<&str, &str> = args.iter().cloned().collect();
+    let args_map: HashMap<&str, &str> = args.iter().copied().collect();
     I18N.with(|i18n| {
         i18n.gettext(
             key,

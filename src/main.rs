@@ -6,8 +6,8 @@ mod utils;
 
 use crate::cli::{Cli, Commands};
 use crate::commands::{
-    delete::delete_wip_branches, delete::DeleteOptions, list::list_wip_branches,
-    restore::restore_wip_changes, restore::RestoreOptions, save::save_wip_changes,
+    delete::DeleteOptions, delete::delete_wip_branches, list::list_wip_branches,
+    restore::RestoreOptions, restore::restore_wip_changes, save::save_wip_changes,
 };
 use anyhow::Result;
 

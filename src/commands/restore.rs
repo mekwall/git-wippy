@@ -1,8 +1,8 @@
 use crate::i18n::{t, t_with_args};
 use crate::output::Output;
-use crate::utils::{git_username_with_git, parse_commit_message, Git, GitCommand};
+use crate::utils::{Git, GitCommand, git_username_with_git, parse_commit_message};
 use anyhow::{Context, Result};
-use dialoguer::{theme::ColorfulTheme, Select};
+use dialoguer::{Select, theme::ColorfulTheme};
 
 pub struct RestoreOptions {
     pub branch_name: Option<String>,
@@ -45,6 +45,7 @@ pub async fn restore_wip_changes(options: RestoreOptions) -> Result<()> {
 }
 
 /// Implementation that accepts a Git instance for better testability
+#[allow(clippy::too_many_lines)]
 pub async fn restore_wip_changes_with_git(git: &impl Git, options: RestoreOptions) -> Result<()> {
     let output = Output::new().await?;
     let username = git_username_with_git(git).await?;
@@ -53,12 +54,12 @@ pub async fn restore_wip_changes_with_git(git: &impl Git, options: RestoreOption
     let selected_branch = if let Some(branch) = options.branch_name {
         if !wip_branches.contains(&branch) {
             let message = t_with_args("branch-not-found", &[("name", &branch)]);
-            output.info(&output.format_with_highlights(&message, &[&format!("'{}'", branch)]))?;
+            output.info(&output.format_with_highlights(&message, &[&format!("'{branch}'")]))?;
             return Ok(());
         }
         branch
     } else if wip_branches.len() > 1 {
-        get_user_selection(&wip_branches).await?
+        get_user_selection(&wip_branches)?
     } else if let Some(branch) = wip_branches.first() {
         branch.clone()
     } else {
@@ -73,7 +74,7 @@ pub async fn restore_wip_changes_with_git(git: &impl Git, options: RestoreOption
         parse_commit_message(&commit_message);
 
     let message = t_with_args("restoring-wip", &[("name", &selected_branch)]);
-    output.info(&output.format_with_highlights(&message, &[&format!("'{}'", selected_branch)]))?;
+    output.info(&output.format_with_highlights(&message, &[&format!("'{selected_branch}'")]))?;
 
     // Check for local changes
     let has_changes = !git.get_staged_files().await?.is_empty()
@@ -88,7 +89,7 @@ pub async fn restore_wip_changes_with_git(git: &impl Git, options: RestoreOption
     if has_changes && options.autostash {
         output.info(&t_with_args("stashing-existing-changes", &[]))?;
         // Create a unique stash name for the local changes
-        let stash_name = format!("git-wippy-autostash-{}", source_branch);
+        let stash_name = format!("git-wippy-autostash-{source_branch}");
         git.execute(vec![
             "stash".to_string(),
             "push".to_string(),
@@ -104,13 +105,11 @@ pub async fn restore_wip_changes_with_git(git: &impl Git, options: RestoreOption
     if git.branch_exists(&source_branch).await? {
         git.checkout(&source_branch).await?;
         let message = t_with_args("checked-out-branch", &[("name", &source_branch)]);
-        output
-            .info(&output.format_with_highlights(&message, &[&format!("'{}'", source_branch)]))?;
+        output.info(&output.format_with_highlights(&message, &[&format!("'{source_branch}'")]))?;
     } else {
         git.create_branch(&source_branch).await?;
         let message = t_with_args("created-branch", &[("name", &source_branch)]);
-        output
-            .info(&output.format_with_highlights(&message, &[&format!("'{}'", source_branch)]))?;
+        output.info(&output.format_with_highlights(&message, &[&format!("'{source_branch}'")]))?;
     }
 
     // Get the list of files in the WIP branch
@@ -122,7 +121,10 @@ pub async fn restore_wip_changes_with_git(git: &impl Git, options: RestoreOption
             selected_branch.clone(),
         ])
         .await?;
-    let files: Vec<String> = files_output.lines().map(|s| s.to_string()).collect();
+    let files: Vec<String> = files_output
+        .lines()
+        .map(std::string::ToString::to_string)
+        .collect();
 
     // For each file in the WIP branch, get its contents and write it
     for file in files {
@@ -149,7 +151,7 @@ pub async fn restore_wip_changes_with_git(git: &impl Git, options: RestoreOption
     // Pop any previously stashed changes if autostash was used
     if has_changes && options.autostash {
         output.info(&t_with_args("restoring-existing-changes", &[]))?;
-        let stash_name = format!("git-wippy-autostash-{}", source_branch);
+        let stash_name = format!("git-wippy-autostash-{source_branch}");
 
         // Try to find the stash index by listing all stashes and searching for our name
         let stash_list = git
@@ -161,17 +163,17 @@ pub async fn restore_wip_changes_with_git(git: &impl Git, options: RestoreOption
         // The stash list format is: stash@{n}: WIP on branch: message
         let stash_index = stash_list
             .lines()
-            .position(|line| line.contains(&format!(": {}", stash_name)))
+            .position(|line| line.contains(&format!(": {stash_name}")))
             .ok_or_else(|| {
                 anyhow::anyhow!(t_with_args(
                     "restore-stash-not-found",
                     &[("name", &stash_name)]
                 ))
             })?;
-        let stash_ref = format!("stash@{{{}}}", stash_index);
+        let stash_ref = format!("stash@{{{stash_index}}}");
 
         // Create a temporary branch from the current state
-        let temp_branch = format!("git-wippy-temp-{}", source_branch);
+        let temp_branch = format!("git-wippy-temp-{source_branch}");
         git.execute(vec![
             "checkout".to_string(),
             "-b".to_string(),
@@ -258,7 +260,7 @@ pub async fn restore_wip_changes_with_git(git: &impl Git, options: RestoreOption
     // Now that we've successfully applied all changes, we can delete the WIP branch
     git.delete_branch(&selected_branch, true).await?;
     let message = t_with_args("deleted-local-branch", &[("name", &selected_branch)]);
-    output.info(&output.format_with_highlights(&message, &[&format!("'{}'", selected_branch)]))?;
+    output.info(&output.format_with_highlights(&message, &[&format!("'{selected_branch}'")]))?;
 
     // Delete the remote branch if it exists
     let remotes = git.get_remotes().await?;
@@ -266,11 +268,11 @@ pub async fn restore_wip_changes_with_git(git: &impl Git, options: RestoreOption
         git.delete_remote_branch("origin", &selected_branch).await?;
         let message = t_with_args("deleted-remote-branch", &[("name", &selected_branch)]);
         output
-            .info(&output.format_with_highlights(&message, &[&format!("'{}'", selected_branch)]))?;
+            .info(&output.format_with_highlights(&message, &[&format!("'{selected_branch}'")]))?;
     }
 
     let message = t_with_args("restore-complete", &[("name", &selected_branch)]);
-    output.info(&output.format_with_highlights(&message, &[&format!("'{}'", selected_branch)]))?;
+    output.info(&output.format_with_highlights(&message, &[&format!("'{selected_branch}'")]))?;
 
     Ok(())
 }
@@ -283,10 +285,10 @@ pub async fn restore_wip_changes_with_git(git: &impl Git, options: RestoreOption
 /// # Returns
 /// * `Ok(String)` - The selected branch name
 /// * `Err` if user interaction fails
-async fn get_user_selection(options: &[String]) -> Result<String> {
+fn get_user_selection(options: &[String]) -> Result<String> {
     let selection = Select::with_theme(&ColorfulTheme::default())
         .with_prompt(t("restore-select-wip-prompt"))
-        .items(&options)
+        .items(options)
         .default(0)
         .interact()
         .context(t("restore-select-wip-failed"))?;

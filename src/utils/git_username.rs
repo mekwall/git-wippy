@@ -45,7 +45,7 @@ mod tests {
                 "config".to_string(),
                 "user.name".to_string(),
             ]))
-            .returning(|_| Ok("".to_string()));
+            .returning(|_| Ok(String::new()));
 
         let result = git_username_with_git(&mock_git).await;
         assert!(result.is_err());

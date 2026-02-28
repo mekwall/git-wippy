@@ -1,8 +1,8 @@
 use crate::i18n::t_with_args;
 use crate::output::Output;
-use crate::utils::{git_username_with_git, Git, GitCommand};
+use crate::utils::{Git, GitCommand, git_username_with_git};
 use anyhow::{Context, Result};
-use dialoguer::{theme::ColorfulTheme, Confirm, MultiSelect};
+use dialoguer::{Confirm, MultiSelect, theme::ColorfulTheme};
 
 pub struct DeleteOptions {
     pub branch_name: Option<String>,
@@ -26,6 +26,7 @@ pub async fn delete_wip_branches(options: DeleteOptions) -> Result<()> {
     delete_wip_branches_with_git(&git, options).await
 }
 
+#[allow(clippy::too_many_lines)]
 pub async fn delete_wip_branches_with_git(git: &impl Git, options: DeleteOptions) -> Result<()> {
     let output = Output::new().await?;
     let username = git_username_with_git(git).await?;
@@ -37,96 +38,97 @@ pub async fn delete_wip_branches_with_git(git: &impl Git, options: DeleteOptions
         return Ok(());
     }
 
-    let branches_to_delete = if options.all {
-        if !options.force {
-            let message = t_with_args(
-                "delete-all-prompt",
-                &[("count", &wip_branches.len().to_string())],
-            );
-            let confirm = Confirm::with_theme(&ColorfulTheme::default())
-                .with_prompt(message)
-                .interact()?;
+    let branches_to_delete =
+        if options.all {
+            if !options.force {
+                let message = t_with_args(
+                    "delete-all-prompt",
+                    &[("count", &wip_branches.len().to_string())],
+                );
+                let confirm = Confirm::with_theme(&ColorfulTheme::default())
+                    .with_prompt(message)
+                    .interact()?;
 
-            if !confirm {
-                output.info(&t_with_args("operation-cancelled", &[]))?;
+                if !confirm {
+                    output.info(&t_with_args("operation-cancelled", &[]))?;
+                    return Ok(());
+                }
+            }
+            wip_branches
+        } else if let Some(branch) = options.branch_name {
+            if !wip_branches.contains(&branch) {
+                let message = t_with_args("branch-not-found", &[("name", &branch)]);
+                output.info(&output.format_with_highlights(&message, &[&format!("'{branch}'")]))?;
                 return Ok(());
             }
-        }
-        wip_branches
-    } else if let Some(branch) = options.branch_name {
-        if !wip_branches.contains(&branch) {
-            let message = t_with_args("branch-not-found", &[("name", &branch)]);
-            output.info(&output.format_with_highlights(&message, &[&format!("'{}'", branch)]))?;
-            return Ok(());
-        }
-        if !options.force {
-            let confirm = Confirm::with_theme(&ColorfulTheme::default())
-                .with_prompt(t_with_args("delete-branch-prompt", &[]))
-                .interact()?;
+            if !options.force {
+                let confirm = Confirm::with_theme(&ColorfulTheme::default())
+                    .with_prompt(t_with_args("delete-branch-prompt", &[]))
+                    .interact()?;
 
-            if !confirm {
-                output.info(&t_with_args("operation-cancelled", &[]))?;
-                return Ok(());
+                if !confirm {
+                    output.info(&t_with_args("operation-cancelled", &[]))?;
+                    return Ok(());
+                }
             }
-        }
-        vec![branch]
-    } else if wip_branches.len() == 1 {
-        // For a single branch, use a simple confirm dialog
-        let branch = &wip_branches[0];
-        output.info(&t_with_args("found-wip-branch", &[]))?;
-        output.info(
-            &output.format_with_highlights(
-                &t_with_args("branch-name", &[("name", branch)]),
-                &[branch],
-            ),
-        )?;
-
-        if !options.force {
-            let confirm = Confirm::with_theme(&ColorfulTheme::default())
-                .with_prompt(t_with_args("delete-branch-prompt", &[]))
-                .interact()?;
-
-            if !confirm {
-                output.info(&t_with_args("operation-cancelled", &[]))?;
-                return Ok(());
-            }
-        }
-        wip_branches
-    } else {
-        // Multiple branches - use multi-select
-        output.info(&t_with_args("select-branches-to-delete", &[]))?;
-        output.info(&t_with_args("selection-instructions", &[]))?;
-
-        let selections = MultiSelect::with_theme(&ColorfulTheme::default())
-            .with_prompt("WIP branches")
-            .items(&wip_branches)
-            .defaults(&vec![false; wip_branches.len()])
-            .interact()?;
-
-        if selections.is_empty() {
-            output.info(&t_with_args("no-branches-selected", &[]))?;
-            return Ok(());
-        }
-
-        // Show what's selected before confirmation
-        let selected_branches: Vec<_> = selections
-            .iter()
-            .map(|&i| wip_branches[i].clone())
-            .collect();
-
-        output.info(&t_with_args("selected-branches", &[]))?;
-        for branch in &selected_branches {
+            vec![branch]
+        } else if wip_branches.len() == 1 {
+            // For a single branch, use a simple confirm dialog
+            let branch = &wip_branches[0];
+            output.info(&t_with_args("found-wip-branch", &[]))?;
             output.info(&output.format_with_highlights(
                 &t_with_args("branch-name", &[("name", branch)]),
                 &[branch],
             ))?;
-        }
 
-        selected_branches
-    };
+            if !options.force {
+                let confirm = Confirm::with_theme(&ColorfulTheme::default())
+                    .with_prompt(t_with_args("delete-branch-prompt", &[]))
+                    .interact()?;
+
+                if !confirm {
+                    output.info(&t_with_args("operation-cancelled", &[]))?;
+                    return Ok(());
+                }
+            }
+            wip_branches
+        } else {
+            // Multiple branches - use multi-select
+            output.info(&t_with_args("select-branches-to-delete", &[]))?;
+            output.info(&t_with_args("selection-instructions", &[]))?;
+
+            let selections = MultiSelect::with_theme(&ColorfulTheme::default())
+                .with_prompt("WIP branches")
+                .items(&wip_branches)
+                .defaults(&vec![false; wip_branches.len()])
+                .interact()?;
+
+            if selections.is_empty() {
+                output.info(&t_with_args("no-branches-selected", &[]))?;
+                return Ok(());
+            }
+
+            // Show what's selected before confirmation
+            let selected_branches: Vec<_> = selections
+                .iter()
+                .map(|&i| wip_branches[i].clone())
+                .collect();
+
+            output.info(&t_with_args("selected-branches", &[]))?;
+            for branch in &selected_branches {
+                output.info(&output.format_with_highlights(
+                    &t_with_args("branch-name", &[("name", branch)]),
+                    &[branch],
+                ))?;
+            }
+
+            selected_branches
+        };
 
     // Ask about remote deletion if not specified
-    let delete_remote = if !options.local_only {
+    let delete_remote = if options.local_only {
+        false
+    } else {
         let remotes = git.get_remotes().await?;
         if remotes.contains(&"origin".to_string()) {
             if options.force {
@@ -140,8 +142,6 @@ pub async fn delete_wip_branches_with_git(git: &impl Git, options: DeleteOptions
         } else {
             false
         }
-    } else {
-        false
     };
 
     // Delete branches
@@ -149,7 +149,7 @@ pub async fn delete_wip_branches_with_git(git: &impl Git, options: DeleteOptions
         // Delete local branch
         git.delete_branch(branch, true)
             .await
-            .context(format!("Failed to delete local branch '{}'", branch))?;
+            .context(format!("Failed to delete local branch '{branch}'"))?;
 
         // Delete remote branch if requested
         if delete_remote {
@@ -161,7 +161,7 @@ pub async fn delete_wip_branches_with_git(git: &impl Git, options: DeleteOptions
                         &[("name", branch), ("error", &e.to_string())],
                     );
                     output.error(
-                        &output.format_with_highlights(&message, &[&format!("'{}'", branch)]),
+                        &output.format_with_highlights(&message, &[&format!("'{branch}'")]),
                     )?;
                 }
             }
@@ -174,7 +174,7 @@ pub async fn delete_wip_branches_with_git(git: &impl Git, options: DeleteOptions
                 ("remote", if delete_remote { "true" } else { "false" }),
             ],
         );
-        output.info(&output.format_with_highlights(&message, &[&format!("'{}'", branch)]))?;
+        output.info(&output.format_with_highlights(&message, &[&format!("'{branch}'")]))?;
     }
 
     let message = t_with_args(
@@ -242,7 +242,7 @@ mod tests {
                 mockall::predicate::eq("origin"),
                 mockall::predicate::eq("wip/test-user/branch1"),
             )
-            .returning(|_, _| Ok("".to_string()));
+            .returning(|_, _| Ok(String::new()));
 
         let options = DeleteOptions {
             branch_name: Some("wip/test-user/branch1".to_string()),
@@ -284,7 +284,7 @@ mod tests {
             mock_git
                 .expect_delete_branch()
                 .with(mockall::predicate::eq(branch), mockall::predicate::eq(true))
-                .returning(move |_, _| Ok(format!("Deleted branch '{}'", branch)));
+                .returning(move |_, _| Ok(format!("Deleted branch '{branch}'")));
         }
 
         // Mock remote check
@@ -300,7 +300,7 @@ mod tests {
                     mockall::predicate::eq("origin"),
                     mockall::predicate::eq(branch),
                 )
-                .returning(|_, _| Ok("".to_string()));
+                .returning(|_, _| Ok(String::new()));
         }
 
         let options = DeleteOptions {
@@ -424,7 +424,7 @@ mod tests {
                 mockall::predicate::eq("origin"),
                 mockall::predicate::eq("wip/test-user/branch1"),
             )
-            .returning(|_, _| Ok("".to_string()));
+            .returning(|_, _| Ok(String::new()));
 
         let options = DeleteOptions {
             branch_name: None,

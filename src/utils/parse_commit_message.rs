@@ -7,10 +7,10 @@ use std::collections::HashSet;
 ///
 /// # Returns
 /// A tuple containing:
-/// * source_branch: The original branch name
-/// * staged_files: List of files that were staged
-/// * changed_files: List of files that were changed but not staged
-/// * untracked_files: List of untracked files
+/// * `source_branch`: The original branch name
+/// * `staged_files`: List of files that were staged
+/// * `changed_files`: List of files that were changed but not staged
+/// * `untracked_files`: List of untracked files
 ///
 /// # Format
 /// Expected commit message format:
@@ -88,7 +88,7 @@ mod tests {
     /// Tests parsing a complete commit message with all sections
     #[test]
     fn test_parse_commit_message() {
-        let message = r#"chore: saving work in progress
+        let message = r"chore: saving work in progress
 
 Source branch: main
 Staged changes:
@@ -99,7 +99,7 @@ Changes:
     changed2.txt
 Untracked:
     untracked1.txt
-    untracked2.txt"#;
+    untracked2.txt";
 
         let (branch, staged, changed, untracked) = parse_commit_message(message);
 

@@ -1,4 +1,4 @@
-use crate::i18n::t_with_args;
+use crate::i18n::{t, t_with_args};
 use crate::output::Output;
 use crate::utils::{git_username_with_git, parse_commit_message, Git, GitCommand};
 use anyhow::{Context, Result};
@@ -81,9 +81,7 @@ pub async fn restore_wip_changes_with_git(git: &impl Git, options: RestoreOption
         || !git.get_untracked_files().await?.is_empty();
 
     if has_changes && !options.autostash {
-        return Err(anyhow::anyhow!(
-            "You have local changes. Please commit or stash them, or use --autostash"
-        ));
+        return Err(anyhow::anyhow!(t("restore-local-changes-error")));
     }
 
     // Stash any existing changes if autostash is enabled
@@ -99,7 +97,7 @@ pub async fn restore_wip_changes_with_git(git: &impl Git, options: RestoreOption
             stash_name.clone(),
         ])
         .await
-        .context("Failed to stash changes")?;
+        .context(t("restore-stash-failed"))?;
     }
 
     // Determine if the source branch exists, create it if not
@@ -157,14 +155,19 @@ pub async fn restore_wip_changes_with_git(git: &impl Git, options: RestoreOption
         let stash_list = git
             .execute(vec!["stash".to_string(), "list".to_string()])
             .await
-            .context("Failed to list stashes")?;
+            .context(t("restore-stash-list-failed"))?;
 
         // Find the stash by looking for the message in the stash list
         // The stash list format is: stash@{n}: WIP on branch: message
         let stash_index = stash_list
             .lines()
             .position(|line| line.contains(&format!(": {}", stash_name)))
-            .ok_or_else(|| anyhow::anyhow!("Could not find stash with name: {}", stash_name))?;
+            .ok_or_else(|| {
+                anyhow::anyhow!(t_with_args(
+                    "restore-stash-not-found",
+                    &[("name", &stash_name)]
+                ))
+            })?;
         let stash_ref = format!("stash@{{{}}}", stash_index);
 
         // Create a temporary branch from the current state
@@ -175,7 +178,7 @@ pub async fn restore_wip_changes_with_git(git: &impl Git, options: RestoreOption
             temp_branch.clone(),
         ])
         .await
-        .context("Failed to create temporary branch")?;
+        .context(t("restore-temp-branch-create-failed"))?;
 
         // Apply the stash to the temporary branch
         let apply_result = git
@@ -189,7 +192,7 @@ pub async fn restore_wip_changes_with_git(git: &impl Git, options: RestoreOption
         // Switch back to the target branch
         git.execute(vec!["checkout".to_string(), source_branch.clone()])
             .await
-            .context("Failed to switch back to source branch")?;
+            .context(t("restore-source-branch-switch-failed"))?;
 
         match apply_result {
             Ok(_) => {
@@ -210,7 +213,7 @@ pub async fn restore_wip_changes_with_git(git: &impl Git, options: RestoreOption
                     temp_branch.clone(),
                 ])
                 .await
-                .context("Failed to delete temporary branch")?;
+                .context(t("restore-temp-branch-delete-failed"))?;
 
                 match merge_result {
                     Ok(_) => {
@@ -221,16 +224,16 @@ pub async fn restore_wip_changes_with_git(git: &impl Git, options: RestoreOption
                             stash_ref.clone(),
                         ])
                         .await
-                        .context("Failed to drop stash")?;
+                        .context(t("restore-stash-drop-failed"))?;
                         output.info(&t_with_args("applied-stash", &[]))?;
                     }
                     Err(e) => {
                         // Don't fail on conflicts, let the user handle them
                         if !e.to_string().contains("conflict") {
-                            return Err(anyhow::anyhow!(
-                                "Failed to restore existing changes: {}",
-                                e
-                            ));
+                            return Err(anyhow::anyhow!(t_with_args(
+                                "restore-existing-changes-failed",
+                                &[("error", &e.to_string())]
+                            )));
                         }
                     }
                 }
@@ -243,8 +246,11 @@ pub async fn restore_wip_changes_with_git(git: &impl Git, options: RestoreOption
                     temp_branch.clone(),
                 ])
                 .await
-                .context("Failed to delete temporary branch")?;
-                return Err(anyhow::anyhow!("Failed to apply stashed changes: {}", e));
+                .context(t("restore-temp-branch-delete-failed"))?;
+                return Err(anyhow::anyhow!(t_with_args(
+                    "restore-stashed-apply-failed",
+                    &[("error", &e.to_string())]
+                )));
             }
         }
     }
@@ -279,11 +285,11 @@ pub async fn restore_wip_changes_with_git(git: &impl Git, options: RestoreOption
 /// * `Err` if user interaction fails
 async fn get_user_selection(options: &[String]) -> Result<String> {
     let selection = Select::with_theme(&ColorfulTheme::default())
-        .with_prompt("Select a WIP branch to restore")
+        .with_prompt(t("restore-select-wip-prompt"))
         .items(&options)
         .default(0)
         .interact()
-        .context("Failed to select a WIP branch")?;
+        .context(t("restore-select-wip-failed"))?;
 
     Ok(options[selection].clone())
 }

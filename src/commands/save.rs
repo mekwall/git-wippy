@@ -7,9 +7,10 @@ pub async fn save_wip_changes(
     local: bool,
     username: Option<String>,
     datetime: Option<String>,
+    message: Option<String>,
 ) -> Result<()> {
     let git = GitCommand::new();
-    save_wip_changes_with_git(&git, local, username, datetime).await
+    save_wip_changes_with_git(&git, local, username, datetime, message).await
 }
 
 pub async fn save_wip_changes_with_git(
@@ -17,6 +18,7 @@ pub async fn save_wip_changes_with_git(
     local: bool,
     username: Option<String>,
     datetime: Option<String>,
+    message: Option<String>,
 ) -> Result<()> {
     let output = Output::new().await?;
 
@@ -38,7 +40,7 @@ pub async fn save_wip_changes_with_git(
     output.info(&t("saving-wip"))?;
 
     // Generate the detailed commit message
-    let commit_message = generate_commit_message(git).await?;
+    let commit_message = generate_commit_message(git, message).await?;
 
     // Create and switch to the new branch
     git.create_branch(&branch_name).await?;
@@ -74,7 +76,7 @@ pub async fn save_wip_changes_with_git(
     Ok(())
 }
 
-async fn generate_commit_message(git: &impl Git) -> Result<String> {
+async fn generate_commit_message(git: &impl Git, message: Option<String>) -> Result<String> {
     let staged = git.get_staged_files().await?;
     let changed = git.get_changed_files().await?;
     let untracked = git.get_untracked_files().await?;
@@ -98,9 +100,11 @@ async fn generate_commit_message(git: &impl Git) -> Result<String> {
         String::new()
     };
 
+    let header = message.unwrap_or_else(|| "chore: saving work in progress".to_string());
+
     let message = format!(
-        "chore: saving work in progress\n\nSource branch: {}{}{}{}",
-        source_branch, staged_section, changed_section, untracked_section
+        "{}\n\nSource branch: {}{}{}{}",
+        header, source_branch, staged_section, changed_section, untracked_section
     );
 
     Ok(message)
@@ -174,7 +178,7 @@ mod tests {
             .with(mockall::predicate::eq("main"))
             .returning(|_| Ok("Switched back to branch 'main'".to_string()));
 
-        save_wip_changes_with_git(&mock_git, true, None, None).await?;
+        save_wip_changes_with_git(&mock_git, true, None, None, None).await?;
         Ok(())
     }
 
@@ -246,7 +250,7 @@ mod tests {
             .with(mockall::predicate::eq("main"))
             .returning(|_| Ok("Switched back to branch 'main'".to_string()));
 
-        save_wip_changes_with_git(&mock_git, false, None, None).await?;
+        save_wip_changes_with_git(&mock_git, false, None, None, None).await?;
         Ok(())
     }
 
@@ -311,7 +315,70 @@ mod tests {
             .with(mockall::predicate::eq("main"))
             .returning(|_| Ok("Switched back to branch 'main'".to_string()));
 
-        save_wip_changes_with_git(&mock_git, false, None, None).await?;
+        save_wip_changes_with_git(&mock_git, false, None, None, None).await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_save_wip_changes_custom_message() -> Result<()> {
+        let mut mock_git = MockGit::new();
+
+        mock_git
+            .expect_execute()
+            .with(mockall::predicate::eq(vec![
+                "config".to_string(),
+                "user.name".to_string(),
+            ]))
+            .returning(|_| Ok("test-user".to_string()));
+
+        mock_git
+            .expect_get_current_branch()
+            .times(2)
+            .returning(|| Ok("main".to_string()));
+
+        mock_git
+            .expect_get_staged_files()
+            .returning(|| Ok("file1.txt".to_string()));
+        mock_git
+            .expect_get_changed_files()
+            .returning(|| Ok(String::new()));
+        mock_git
+            .expect_get_untracked_files()
+            .returning(|| Ok(String::new()));
+
+        mock_git
+            .expect_create_branch()
+            .with(mockall::predicate::function(|branch: &str| {
+                branch.starts_with("wip/test-user/")
+            }))
+            .returning(|_| Ok("Created branch".to_string()));
+
+        mock_git
+            .expect_stage_all()
+            .returning(|| Ok("Changes staged".to_string()));
+
+        mock_git
+            .expect_commit()
+            .with(mockall::predicate::function(|msg: &str| {
+                msg.starts_with("custom save message")
+                    && msg.contains("Source branch: main")
+                    && msg.contains("Staged changes:\n\tfile1.txt")
+            }))
+            .returning(|_| Ok("Created commit".to_string()));
+
+        mock_git
+            .expect_checkout()
+            .with(mockall::predicate::eq("main"))
+            .returning(|_| Ok("Switched back to branch 'main'".to_string()));
+
+        save_wip_changes_with_git(
+            &mock_git,
+            true,
+            None,
+            None,
+            Some("custom save message".to_string()),
+        )
+        .await?;
         Ok(())
     }
 }

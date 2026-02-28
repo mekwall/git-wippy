@@ -233,6 +233,32 @@ pub trait Git: Send + Sync {
         Ok(branches)
     }
 
+    async fn get_all_wip_branches(&self) -> Result<Vec<String>> {
+        let output = Output::new().await?;
+        let git_output = self
+            .execute(vec![
+                "branch".to_string(),
+                "--all".to_string(),
+                "--format=%(refname:short)".to_string(),
+            ])
+            .await?;
+
+        output.debug(&format!("Raw git output:\n{}", git_output))?;
+
+        let branches: Vec<String> = git_output
+            .lines()
+            .map(|line| line.trim().to_string())
+            .filter(|line| !line.is_empty())
+            .filter(|line| line.starts_with("wip/"))
+            .map(|line| line.replace("remotes/origin/", ""))
+            .collect::<HashSet<_>>()
+            .into_iter()
+            .collect();
+
+        output.debug(&format!("Found all-user branches: {:?}", branches))?;
+        Ok(branches)
+    }
+
     /// Verifies if a branch exists
     async fn branch_exists(&self, branch: &str) -> Result<bool> {
         self.execute(vec![
@@ -452,6 +478,32 @@ impl Git for GitCommand {
         Ok(branches)
     }
 
+    async fn get_all_wip_branches(&self) -> Result<Vec<String>> {
+        let output = Output::new().await?;
+        let git_output = self
+            .execute(vec![
+                "branch".to_string(),
+                "--all".to_string(),
+                "--format=%(refname:short)".to_string(),
+            ])
+            .await?;
+
+        output.debug(&format!("Raw git output:\n{}", git_output))?;
+
+        let branches: Vec<String> = git_output
+            .lines()
+            .map(|line| line.trim().to_string())
+            .filter(|line| !line.is_empty())
+            .filter(|line| line.starts_with("wip/"))
+            .map(|line| line.replace("remotes/origin/", ""))
+            .collect::<HashSet<_>>()
+            .into_iter()
+            .collect();
+
+        output.debug(&format!("Found all-user branches: {:?}", branches))?;
+        Ok(branches)
+    }
+
     async fn is_working_tree_clean(&self) -> Result<bool> {
         let output = self
             .execute(vec!["status".to_string(), "--porcelain".to_string()])
@@ -595,6 +647,24 @@ mod tests {
         let branches = mock.get_user_wip_branches("test-user").await?;
         assert_eq!(branches.len(), 1);
         assert!(branches.contains(&"wip/test-user/branch1".to_string()));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_get_all_wip_branches() -> Result<()> {
+        let mut mock = MockGit::new();
+
+        mock.expect_get_all_wip_branches().returning(|| {
+            Ok(vec![
+                "wip/test-user/branch1".to_string(),
+                "wip/other-user/branch2".to_string(),
+            ])
+        });
+
+        let branches = mock.get_all_wip_branches().await?;
+        assert_eq!(branches.len(), 2);
+        assert!(branches.contains(&"wip/test-user/branch1".to_string()));
+        assert!(branches.contains(&"wip/other-user/branch2".to_string()));
         Ok(())
     }
 }

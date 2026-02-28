@@ -17,10 +17,16 @@ async fn main() -> Result<()> {
 
     match cli.command {
         Commands::Save(options) => {
-            save_wip_changes(options.local, options.username, options.datetime).await?;
+            save_wip_changes(
+                options.local,
+                options.username,
+                options.datetime,
+                options.message,
+            )
+            .await?;
         }
-        Commands::List => {
-            list_wip_branches().await?;
+        Commands::List(options) => {
+            list_wip_branches(options.all).await?;
         }
         Commands::Delete(options) => {
             delete_wip_branches(DeleteOptions {

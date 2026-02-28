@@ -3,15 +3,19 @@ use crate::output::Output;
 use crate::utils::{git_username_with_git, Git, GitCommand};
 use anyhow::Result;
 
-pub async fn list_wip_branches() -> Result<()> {
+pub async fn list_wip_branches(all: bool) -> Result<()> {
     let git = GitCommand::new();
-    list_wip_branches_with_git(&git).await
+    list_wip_branches_with_git(&git, all).await
 }
 
-pub async fn list_wip_branches_with_git(git: &impl Git) -> Result<()> {
+pub async fn list_wip_branches_with_git(git: &impl Git, all: bool) -> Result<()> {
     let output = Output::new().await?;
     let username = git_username_with_git(git).await?;
-    let wip_branches = git.get_user_wip_branches(&username).await?;
+    let wip_branches = if all {
+        git.get_all_wip_branches().await?
+    } else {
+        git.get_user_wip_branches(&username).await?
+    };
 
     if wip_branches.is_empty() {
         let message = t_with_args("no-wip-branches", &[("username", &username)]);
@@ -54,7 +58,7 @@ mod tests {
             .with(mockall::predicate::eq("test-user"))
             .returning(|_| Ok(vec!["wip/test-user/branch1".to_string()]));
 
-        list_wip_branches_with_git(&mock_git).await?;
+        list_wip_branches_with_git(&mock_git, false).await?;
         Ok(())
     }
 
@@ -77,7 +81,30 @@ mod tests {
             .with(mockall::predicate::eq("test-user"))
             .returning(|_| Ok(vec![]));
 
-        list_wip_branches_with_git(&mock_git).await?;
+        list_wip_branches_with_git(&mock_git, false).await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_list_wip_branches_all_users() -> Result<()> {
+        let mut mock_git = MockGit::new();
+
+        mock_git
+            .expect_execute()
+            .with(mockall::predicate::eq(vec![
+                "config".to_string(),
+                "user.name".to_string(),
+            ]))
+            .returning(|_| Ok("test-user".to_string()));
+
+        mock_git.expect_get_all_wip_branches().returning(|| {
+            Ok(vec![
+                "wip/test-user/branch1".to_string(),
+                "wip/other-user/branch2".to_string(),
+            ])
+        });
+
+        list_wip_branches_with_git(&mock_git, true).await?;
         Ok(())
     }
 }

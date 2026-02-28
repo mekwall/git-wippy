@@ -702,3 +702,69 @@ async fn test_save_without_remote() {
             .stdout(predicates::str::contains(&branch_name));
     }
 }
+
+#[tokio::test]
+async fn test_save_with_custom_message() {
+    let temp_dir = setup_git_repo();
+
+    fs::write(temp_dir.path().join("custom.txt"), "custom message content").unwrap();
+
+    let custom_message = "custom: keep this wip context";
+
+    let mut cmd = Command::cargo_bin("git-wippy").unwrap();
+    cmd.current_dir(&temp_dir)
+        .env("LANG", "en-US")
+        .arg("save")
+        .arg("--local")
+        .arg("--message")
+        .arg(custom_message)
+        .assert()
+        .success();
+
+    let branch_name = get_wip_branch_name(&temp_dir);
+    let output = Command::new("git")
+        .current_dir(&temp_dir)
+        .args(["log", "-1", "--pretty=%B", &branch_name])
+        .output()
+        .unwrap();
+
+    let commit_message = String::from_utf8_lossy(&output.stdout);
+    assert!(commit_message.contains(custom_message));
+    assert!(commit_message.contains("Source branch: main"));
+}
+
+#[tokio::test]
+async fn test_list_all_shows_other_users_branches() {
+    let temp_dir = setup_git_repo();
+
+    fs::write(temp_dir.path().join("mine.txt"), "my content").unwrap();
+
+    let mut cmd = Command::cargo_bin("git-wippy").unwrap();
+    cmd.current_dir(&temp_dir)
+        .env("LANG", "en-US")
+        .arg("save")
+        .arg("--local")
+        .assert()
+        .success();
+
+    Command::new("git")
+        .current_dir(&temp_dir)
+        .args(["checkout", "-b", "wip/other.user/manual"])
+        .output()
+        .unwrap();
+    Command::new("git")
+        .current_dir(&temp_dir)
+        .args(["checkout", "main"])
+        .output()
+        .unwrap();
+
+    let mut cmd = Command::cargo_bin("git-wippy").unwrap();
+    cmd.current_dir(&temp_dir)
+        .env("LANG", "en-US")
+        .arg("list")
+        .arg("--all")
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("wip/test.user/"))
+        .stdout(predicates::str::contains("wip/other.user/manual"));
+}

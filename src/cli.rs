@@ -32,6 +32,15 @@ pub struct SaveArgs {
     /// Specify a custom date and time
     #[arg(short, long, value_name = "DATETIME", help = t("save-datetime-help"))]
     pub datetime: Option<String>,
+
+    #[arg(short = 'm', long, value_name = "MESSAGE", help = t("save-message-help"))]
+    pub message: Option<String>,
+}
+
+#[derive(Args)]
+pub struct ListArgs {
+    #[arg(short, long, action = clap::ArgAction::SetTrue, help = t("list-all-help"))]
+    pub all: bool,
 }
 
 #[derive(Args)]
@@ -78,7 +87,7 @@ pub enum Commands {
     #[command(alias = "l")]
     #[command(about = t("list-command-about"))]
     #[command(long_about = t("list-command-long-about"))]
-    List,
+    List(ListArgs),
 
     #[command(alias = "d")]
     #[command(about = t("delete-command-about"))]
@@ -100,10 +109,13 @@ impl Cli {
                     local: sub_matches.get_flag("local"),
                     username: sub_matches.get_one::<String>("username").cloned(),
                     datetime: sub_matches.get_one::<String>("datetime").cloned(),
+                    message: sub_matches.get_one::<String>("message").cloned(),
                 }),
             },
-            Some(("list", _)) => Self {
-                command: Commands::List,
+            Some(("list", sub_matches)) => Self {
+                command: Commands::List(ListArgs {
+                    all: sub_matches.get_flag("all"),
+                }),
             },
             Some(("delete", sub_matches)) => Self {
                 command: Commands::Delete(DeleteArgs {

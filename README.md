@@ -73,10 +73,10 @@ git wippy restore wip/username/2024-03-21-175930
 
 2. **Listing Changes**:
 
-   - Shows all WIP branches for the current user
-   - Displays branch creation time and source branch
-   - Supports filtering and detailed views
-   - Color-coded output for better readability
+   - Shows WIP branches for the current user by default
+   - Supports `--all` to include WIP branches for all users
+   - De-duplicates local/remote branch entries
+   - Shows branch names in localized output
 
 3. **Restoring Changes**:
    - Interactive branch selection with preview

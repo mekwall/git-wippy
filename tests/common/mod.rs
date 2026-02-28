@@ -7,7 +7,7 @@ use unic_langid::LanguageIdentifier;
 pub fn setup_git_repo() -> TempDir {
     let temp_dir = TempDir::new().unwrap();
     Command::new("git")
-        .args(&["init"])
+        .args(["init", "--initial-branch=main"])
         .current_dir(&temp_dir)
         .assert()
         .success();

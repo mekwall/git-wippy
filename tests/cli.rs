@@ -16,7 +16,7 @@ async fn test_save_and_list() {
         fs::write(temp_dir.path().join("test.txt"), "modified content").unwrap();
 
         // Test save command
-        let mut cmd = Command::cargo_bin("git-wippy").unwrap();
+        let mut cmd = assert_cmd::cargo::cargo_bin_cmd!("git-wippy");
         cmd.current_dir(&temp_dir)
             .env("LANG", locale)
             .arg("save")
@@ -46,7 +46,7 @@ async fn test_save_and_list() {
             }));
 
         // Test list command
-        let mut cmd = Command::cargo_bin("git-wippy").unwrap();
+        let mut cmd = assert_cmd::cargo::cargo_bin_cmd!("git-wippy");
         cmd.current_dir(&temp_dir)
             .env("LANG", locale)
             .arg("list")
@@ -71,7 +71,7 @@ async fn test_delete_wip() {
         // Create and save a WIP
         fs::write(temp_dir.path().join("test.txt"), "content to delete").unwrap();
 
-        let mut cmd = Command::cargo_bin("git-wippy").unwrap();
+        let mut cmd = assert_cmd::cargo::cargo_bin_cmd!("git-wippy");
         cmd.current_dir(&temp_dir)
             .env("LANG", locale)
             .arg("save")
@@ -83,7 +83,7 @@ async fn test_delete_wip() {
         let branch_name = get_wip_branch_name(&temp_dir);
 
         // Delete the WIP
-        let mut cmd = Command::cargo_bin("git-wippy").unwrap();
+        let mut cmd = assert_cmd::cargo::cargo_bin_cmd!("git-wippy");
         cmd.current_dir(&temp_dir)
             .env("LANG", locale)
             .arg("delete")
@@ -101,7 +101,7 @@ async fn test_delete_wip() {
             }));
 
         // Verify it's gone from the list
-        let mut cmd = Command::cargo_bin("git-wippy").unwrap();
+        let mut cmd = assert_cmd::cargo::cargo_bin_cmd!("git-wippy");
         cmd.current_dir(&temp_dir)
             .env("LANG", locale)
             .arg("list")
@@ -118,10 +118,11 @@ async fn test_delete_wip() {
 }
 
 #[tokio::test]
+#[allow(clippy::too_many_lines)]
 async fn test_help_text_localization() {
     // Test help text in all locales
     for locale in ["en-US", "en-GB", "fr-FR", "de-DE"] {
-        let mut cmd = Command::cargo_bin("git-wippy").unwrap();
+        let mut cmd = assert_cmd::cargo::cargo_bin_cmd!("git-wippy");
         cmd.env("LANG", locale)
             .arg("--help")
             .assert()
@@ -159,13 +160,13 @@ async fn test_help_text_localization() {
 
     // Test with region codes and UTF-8 encoding
     for locale in ["en_US.UTF-8", "en_GB.UTF-8", "fr_FR.UTF-8", "de_DE.UTF-8"] {
-        let mut cmd = Command::cargo_bin("git-wippy").unwrap();
+        let mut cmd = assert_cmd::cargo::cargo_bin_cmd!("git-wippy");
         let base_locale = match locale.split('_').next().unwrap() {
             "en" => "en-US", // Default to en-US unless GB is specified
             lang => lang,
         };
         let region = locale.split('_').nth(1).unwrap().split('.').next().unwrap();
-        let ietf_locale = format!("{}-{}", base_locale, region);
+        let ietf_locale = format!("{base_locale}-{region}");
 
         cmd.env("LANG", locale)
             .arg("--help")
@@ -203,7 +204,7 @@ async fn test_help_text_localization() {
     }
 
     // Test with no locale set (should default to en-US)
-    let mut cmd = Command::cargo_bin("git-wippy").unwrap();
+    let mut cmd = assert_cmd::cargo::cargo_bin_cmd!("git-wippy");
     cmd.env_remove("LANG")
         .env_remove("LC_ALL")
         .env_remove("LC_MESSAGES")
@@ -278,7 +279,7 @@ async fn test_restore_wip() {
         fs::write(temp_dir.path().join("untracked.txt"), "new untracked").unwrap();
 
         // Save the WIP
-        let mut cmd = Command::cargo_bin("git-wippy").unwrap();
+        let mut cmd = assert_cmd::cargo::cargo_bin_cmd!("git-wippy");
         cmd.current_dir(&temp_dir)
             .env("LANG", locale)
             .arg("save")
@@ -290,7 +291,7 @@ async fn test_restore_wip() {
         let branch_name = get_wip_branch_name(&temp_dir);
 
         // Restore the WIP
-        let mut cmd = Command::cargo_bin("git-wippy").unwrap();
+        let mut cmd = assert_cmd::cargo::cargo_bin_cmd!("git-wippy");
         cmd.current_dir(&temp_dir)
             .env("LANG", locale)
             .arg("restore")
@@ -359,7 +360,7 @@ async fn test_restore_wip_with_autostash() {
         fs::write(temp_dir.path().join("untracked.txt"), "new untracked").unwrap();
 
         // Save the WIP
-        let mut cmd = Command::cargo_bin("git-wippy").unwrap();
+        let mut cmd = assert_cmd::cargo::cargo_bin_cmd!("git-wippy");
         cmd.current_dir(&temp_dir)
             .env("LANG", locale)
             .arg("save")
@@ -393,7 +394,7 @@ async fn test_restore_wip_with_autostash() {
         .unwrap();
 
         // Restore the WIP with autostash
-        let mut cmd = Command::cargo_bin("git-wippy").unwrap();
+        let mut cmd = assert_cmd::cargo::cargo_bin_cmd!("git-wippy");
         cmd.current_dir(&temp_dir)
             .env("LANG", locale)
             .arg("restore")
@@ -468,7 +469,7 @@ async fn test_restore_wip_fails_with_local_changes() {
         fs::write(temp_dir.path().join("untracked.txt"), "new untracked").unwrap();
 
         // Save the WIP
-        let mut cmd = Command::cargo_bin("git-wippy").unwrap();
+        let mut cmd = assert_cmd::cargo::cargo_bin_cmd!("git-wippy");
         cmd.current_dir(&temp_dir)
             .env("LANG", locale)
             .arg("save")
@@ -490,7 +491,7 @@ async fn test_restore_wip_fails_with_local_changes() {
         .unwrap();
 
         // Restore should fail due to local changes
-        let mut cmd = Command::cargo_bin("git-wippy").unwrap();
+        let mut cmd = assert_cmd::cargo::cargo_bin_cmd!("git-wippy");
         cmd.current_dir(&temp_dir)
             .env("LANG", locale)
             .arg("restore")
@@ -548,7 +549,7 @@ async fn test_restore_wip_with_autostash_conflicts() {
         fs::write(temp_dir.path().join("untracked.txt"), "new untracked").unwrap();
 
         // Save the WIP
-        let mut cmd = Command::cargo_bin("git-wippy").unwrap();
+        let mut cmd = assert_cmd::cargo::cargo_bin_cmd!("git-wippy");
         cmd.current_dir(&temp_dir)
             .env("LANG", locale)
             .arg("save")
@@ -580,7 +581,7 @@ async fn test_restore_wip_with_autostash_conflicts() {
         .unwrap();
 
         // Restore the WIP with autostash
-        let mut cmd = Command::cargo_bin("git-wippy").unwrap();
+        let mut cmd = assert_cmd::cargo::cargo_bin_cmd!("git-wippy");
         cmd.current_dir(&temp_dir)
             .env("LANG", locale)
             .arg("restore")
@@ -630,7 +631,7 @@ async fn test_save_with_remote() {
         fs::write(local_dir.path().join("test.txt"), "modified content").unwrap();
 
         // Test save command with remote
-        let mut cmd = Command::cargo_bin("git-wippy").unwrap();
+        let mut cmd = assert_cmd::cargo::cargo_bin_cmd!("git-wippy");
         cmd.current_dir(&local_dir)
             .env("LANG", locale)
             .arg("save")
@@ -655,7 +656,7 @@ async fn test_save_with_remote() {
         let branch_name = get_wip_branch_name(&local_dir);
         Command::new("git")
             .current_dir(&local_dir)
-            .args(&["ls-remote", "--heads", "origin", &branch_name])
+            .args(["ls-remote", "--heads", "origin", &branch_name])
             .assert()
             .success()
             .stdout(predicates::str::contains(&branch_name));
@@ -671,7 +672,7 @@ async fn test_save_without_remote() {
         fs::write(temp_dir.path().join("test.txt"), "modified content").unwrap();
 
         // Test save command without remote
-        let mut cmd = Command::cargo_bin("git-wippy").unwrap();
+        let mut cmd = assert_cmd::cargo::cargo_bin_cmd!("git-wippy");
         cmd.current_dir(&temp_dir)
             .env("LANG", locale)
             .arg("save")
@@ -696,7 +697,7 @@ async fn test_save_without_remote() {
         let branch_name = get_wip_branch_name(&temp_dir);
         Command::new("git")
             .current_dir(&temp_dir)
-            .args(&["branch", "--list", &branch_name])
+            .args(["branch", "--list", &branch_name])
             .assert()
             .success()
             .stdout(predicates::str::contains(&branch_name));
@@ -711,7 +712,7 @@ async fn test_save_with_custom_message() {
 
     let custom_message = "custom: keep this wip context";
 
-    let mut cmd = Command::cargo_bin("git-wippy").unwrap();
+    let mut cmd = assert_cmd::cargo::cargo_bin_cmd!("git-wippy");
     cmd.current_dir(&temp_dir)
         .env("LANG", "en-US")
         .arg("save")
@@ -739,7 +740,7 @@ async fn test_list_all_shows_other_users_branches() {
 
     fs::write(temp_dir.path().join("mine.txt"), "my content").unwrap();
 
-    let mut cmd = Command::cargo_bin("git-wippy").unwrap();
+    let mut cmd = assert_cmd::cargo::cargo_bin_cmd!("git-wippy");
     cmd.current_dir(&temp_dir)
         .env("LANG", "en-US")
         .arg("save")
@@ -758,7 +759,7 @@ async fn test_list_all_shows_other_users_branches() {
         .output()
         .unwrap();
 
-    let mut cmd = Command::cargo_bin("git-wippy").unwrap();
+    let mut cmd = assert_cmd::cargo::cargo_bin_cmd!("git-wippy");
     cmd.current_dir(&temp_dir)
         .env("LANG", "en-US")
         .arg("list")

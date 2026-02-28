@@ -14,17 +14,17 @@ pub fn setup_git_repo() -> TempDir {
 
     // Set up git config
     Command::new("git")
-        .args(&["config", "--local", "user.name", "test.user"])
+        .args(["config", "--local", "user.name", "test.user"])
         .current_dir(&temp_dir)
         .assert()
         .success();
     Command::new("git")
-        .args(&["config", "--local", "user.email", "test@example.com"])
+        .args(["config", "--local", "user.email", "test@example.com"])
         .current_dir(&temp_dir)
         .assert()
         .success();
     Command::new("git")
-        .args(&["config", "--local", "commit.gpgsign", "false"])
+        .args(["config", "--local", "commit.gpgsign", "false"])
         .current_dir(&temp_dir)
         .assert()
         .success();
@@ -32,12 +32,12 @@ pub fn setup_git_repo() -> TempDir {
     // Create and commit a test file
     fs::write(temp_dir.path().join("test.txt"), "initial content").unwrap();
     Command::new("git")
-        .args(&["add", "test.txt"])
+        .args(["add", "test.txt"])
         .current_dir(&temp_dir)
         .assert()
         .success();
     Command::new("git")
-        .args(&["commit", "-m", "Initial commit"])
+        .args(["commit", "-m", "Initial commit"])
         .current_dir(&temp_dir)
         .assert()
         .success();
@@ -47,7 +47,7 @@ pub fn setup_git_repo() -> TempDir {
 
 pub fn get_wip_branch_name(temp_dir: &TempDir) -> String {
     let output = Command::new("git")
-        .args(&["branch", "--list", "wip/test.user/*"])
+        .args(["branch", "--list", "wip/test.user/*"])
         .current_dir(temp_dir)
         .output()
         .unwrap();
@@ -72,7 +72,10 @@ fn get_bundle(locale: &str) -> FluentBundle<FluentResource> {
 
     let resource_path = match (
         lang_id.language.as_str(),
-        lang_id.region.as_ref().map(|r| r.as_str()),
+        lang_id
+            .region
+            .as_ref()
+            .map(unic_langid::subtags::Region::as_str),
     ) {
         ("en", Some("GB")) => include_str!("../../locales/en-GB.ftl"),
         ("de", Some("DE") | None) => include_str!("../../locales/de-DE.ftl"),
@@ -112,7 +115,7 @@ pub fn t_with_args(key: &str, args: &[(&str, &str)], locale: &str) -> String {
         // Handle both variable formats:
         // - { $username } -> use "username" as key
         // - {name} -> use "name" as key
-        let var_name = if k.starts_with('$') { &k[1..] } else { k };
+        let var_name = k.strip_prefix('$').unwrap_or(*k);
         fluent_args.set(var_name, FluentValue::from(*v));
     }
 
@@ -135,7 +138,7 @@ pub fn t_with_args(key: &str, args: &[(&str, &str)], locale: &str) -> String {
 
 /// Normalize text by removing bidirectional control characters
 pub fn normalize_text(text: &str) -> String {
-    text.replace('\u{2068}', "").replace('\u{2069}', "")
+    text.replace(['\u{2068}', '\u{2069}'], "")
 }
 
 /// Set up a Git repository with a remote
@@ -143,7 +146,7 @@ pub fn setup_git_repo_with_remote() -> (TempDir, TempDir) {
     // Set up the remote repository
     let remote_dir = TempDir::new().unwrap();
     Command::new("git")
-        .args(&["init", "--bare"])
+        .args(["init", "--bare"])
         .current_dir(&remote_dir)
         .assert()
         .success();
@@ -153,7 +156,7 @@ pub fn setup_git_repo_with_remote() -> (TempDir, TempDir) {
 
     // Add the remote
     Command::new("git")
-        .args(&[
+        .args([
             "remote",
             "add",
             "origin",
@@ -165,7 +168,7 @@ pub fn setup_git_repo_with_remote() -> (TempDir, TempDir) {
 
     // Push initial commit to remote
     Command::new("git")
-        .args(&["push", "-u", "origin", "main"])
+        .args(["push", "-u", "origin", "main"])
         .current_dir(&local_dir)
         .assert()
         .success();

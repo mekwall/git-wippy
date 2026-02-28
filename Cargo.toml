@@ -2,7 +2,7 @@
 name = "git-wippy"
 description = "Git stash with super powers"
 documentation = "https://github.com/mekwall/git-wippy"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 rust-version = "1.93"
 

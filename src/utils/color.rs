@@ -49,7 +49,7 @@ impl ColorConfig {
     async fn init(&mut self, git: &impl Git) {
         let auto_color = std::io::stdout().is_terminal()
             && env::var("NO_COLOR").is_err()
-            && env::var("TERM").map(|t| t != "dumb").unwrap_or(true);
+            && env::var("TERM").map_or(true, |t| t != "dumb");
 
         match git.get_config_value("color.ui").await {
             Ok(Some(value)) => match value.as_str() {
@@ -156,7 +156,7 @@ mod tests {
         assert!(
             config.enabled == std::io::stdout().is_terminal()
                 && env::var("NO_COLOR").is_err()
-                && env::var("TERM").map(|t| t != "dumb").unwrap_or(true)
+                && env::var("TERM").map_or(true, |t| t != "dumb")
         );
     }
 
@@ -172,7 +172,7 @@ mod tests {
         assert!(
             config.enabled == std::io::stdout().is_terminal()
                 && env::var("NO_COLOR").is_err()
-                && env::var("TERM").map(|t| t != "dumb").unwrap_or(true)
+                && env::var("TERM").map_or(true, |t| t != "dumb")
         );
     }
 
@@ -200,7 +200,7 @@ mod tests {
         assert!(
             config.enabled == std::io::stdout().is_terminal()
                 && env::var("NO_COLOR").is_err()
-                && env::var("TERM").map(|t| t != "dumb").unwrap_or(true)
+                && env::var("TERM").map_or(true, |t| t != "dumb")
         );
     }
 
